@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { HeroVideoCarousel } from '@/components/HeroVideoCarousel';
 import { useState, useEffect } from 'react';
 
 const HEADLINES = [
@@ -36,13 +37,10 @@ export default function Home() {
 
   return (
     <div className="relative h-screen overflow-hidden bg-black">
-      <div
-        className="absolute inset-0"
-        style={{
-          background:
-            'linear-gradient(135deg, hsl(220,20%,8%) 0%, hsl(240,15%,12%) 50%, hsl(220,18%,10%) 100%)',
-        }}
-      />
+      {/* Video Background */}
+      <div className="absolute inset-0">
+        <HeroVideoCarousel />
+      </div>
 
       <div className="relative z-10 h-full flex flex-col">
         {/* Hero */}

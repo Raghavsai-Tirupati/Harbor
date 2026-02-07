@@ -34,7 +34,7 @@ export function Hero() {
   return (
     <div className="relative h-screen w-full overflow-hidden bg-black">
       {/* Crossfading Video Carousel */}
-      <HeroVideoCarousel isMuted={isMuted} />
+      <HeroVideoCarousel />
 
       {/* Full-Width Navbar */}
       <motion.nav

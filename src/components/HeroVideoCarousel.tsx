@@ -1,20 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 
-const VIDEO_SOURCES = [
-  'https://mojli.s3.us-east-2.amazonaws.com/Mojli+Website+upscaled+(12mb).webm',
-  // Add more video URLs here as needed:
-  // 'https://example.com/video-2.webm',
-  // 'https://example.com/video-3.webm',
-]
+import heroVideo1 from '@/assets/hero-video-1.mp4'
+import heroVideo2 from '@/assets/hero-video-2.mp4'
+import heroVideo3 from '@/assets/hero-video-3.mp4'
+import heroVideo4 from '@/assets/hero-video-4.mp4'
 
-const CROSSFADE_DURATION = 1200 // ms for opacity transition
-const END_THRESHOLD = 0.5 // seconds before end to trigger crossfade
+const VIDEO_SOURCES = [heroVideo4, heroVideo3, heroVideo2, heroVideo1]
 
-interface HeroVideoCarouselProps {
-  isMuted: boolean
-}
+const CROSSFADE_DURATION = 1200
+const END_THRESHOLD = 0.5
 
-export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
+export function HeroVideoCarousel() {
   const videoARef = useRef<HTMLVideoElement>(null)
   const videoBRef = useRef<HTMLVideoElement>(null)
   const [activeSlot, setActiveSlot] = useState<'A' | 'B'>('A')
@@ -26,7 +22,6 @@ export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
     []
   )
 
-  // Set initial sources
   useEffect(() => {
     if (videoARef.current) {
       videoARef.current.src = VIDEO_SOURCES[0]
@@ -38,35 +33,20 @@ export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
     }
   }, [getNextIndex])
 
-  // Mute/unmute sync
-  useEffect(() => {
-    const activeVideo = activeSlot === 'A' ? videoARef.current : videoBRef.current
-    const inactiveVideo = activeSlot === 'A' ? videoBRef.current : videoARef.current
-    if (activeVideo) {
-      activeVideo.muted = isMuted
-      activeVideo.volume = isMuted ? 0 : 0.7
-    }
-    if (inactiveVideo) {
-      inactiveVideo.muted = true
-      inactiveVideo.volume = 0
-    }
-  }, [isMuted, activeSlot])
-
   // Autoplay with mobile fallbacks
   useEffect(() => {
     const activeVideo = activeSlot === 'A' ? videoARef.current : videoBRef.current
     if (!activeVideo) return
 
     const tryPlay = () => {
-      activeVideo.muted = isMuted
-      activeVideo.volume = isMuted ? 0 : 0.7
+      activeVideo.muted = true
+      activeVideo.volume = 0
       const p = activeVideo.play()
       if (p) p.catch(() => {})
     }
 
     tryPlay()
 
-    // iOS Safari fallback
     const handleInteraction = () => {
       tryPlay()
       document.removeEventListener('touchstart', handleInteraction)
@@ -75,7 +55,6 @@ export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
     document.addEventListener('touchstart', handleInteraction, { once: true })
     document.addEventListener('click', handleInteraction, { once: true })
 
-    // IntersectionObserver fallback
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) tryPlay()
@@ -89,11 +68,10 @@ export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
       document.removeEventListener('touchstart', handleInteraction)
       document.removeEventListener('click', handleInteraction)
     }
-  }, [activeSlot, isMuted])
+  }, [activeSlot])
 
-  // Crossfade logic: listen for timeupdate on active video
+  // Crossfade logic
   useEffect(() => {
-    // Only crossfade if we have multiple videos
     if (VIDEO_SOURCES.length <= 1) return
 
     const activeVideo = activeSlot === 'A' ? videoARef.current : videoBRef.current
@@ -108,7 +86,6 @@ export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
       if (remaining <= END_THRESHOLD && activeVideo.duration > 0) {
         crossfadeTriggeredRef.current = true
 
-        // Prepare next video
         const nextIdx = getNextIndex(currentIndex)
         inactiveVideo.src = VIDEO_SOURCES[nextIdx]
         inactiveVideo.load()
@@ -117,7 +94,6 @@ export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
         const p = inactiveVideo.play()
         if (p) p.catch(() => {})
 
-        // Swap active slot
         setActiveSlot((prev) => (prev === 'A' ? 'B' : 'A'))
         setCurrentIndex(nextIdx)
       }
@@ -127,16 +103,8 @@ export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
     return () => activeVideo.removeEventListener('timeupdate', handleTimeUpdate)
   }, [activeSlot, currentIndex, getNextIndex])
 
-  // When only one video, ensure it loops
-  useEffect(() => {
-    if (VIDEO_SOURCES.length === 1) {
-      if (videoARef.current) videoARef.current.loop = true
-    }
-  }, [])
-
   return (
     <>
-      {/* Video Slot A */}
       <video
         ref={videoARef}
         className="absolute inset-0 w-full h-full object-cover"
@@ -151,7 +119,6 @@ export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
         preload="auto"
       />
 
-      {/* Video Slot B */}
       <video
         ref={videoBRef}
         className="absolute inset-0 w-full h-full object-cover"
@@ -166,13 +133,11 @@ export function HeroVideoCarousel({ isMuted }: HeroVideoCarouselProps) {
         preload="auto"
       />
 
-      {/* Dark overlay for text readability */}
       <div
         className="absolute inset-0 bg-black/60"
         style={{ zIndex: 10, pointerEvents: 'none' }}
       />
 
-      {/* Aggressive hide native controls */}
       <style>{`
         video::-webkit-media-controls,
         video::-webkit-media-controls-panel,
