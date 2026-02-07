@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HeroVideoCarousel } from '@/components/HeroVideoCarousel';
-import { useState, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 
 const HEADLINES = [
   { id: 1, title: 'Earthquake Response', subtitle: 'Breaking disaster news updates', source: 'Reuters', slug: 'earthquake-response' },
@@ -13,19 +13,22 @@ const HEADLINES = [
   { id: 6, title: 'Recovery Operations', subtitle: 'Recovery operations in progress', source: 'The Guardian', slug: 'recovery-ops' },
 ];
 
+const VIDEOS_PER_HEADLINE = 2;
+
 const fade = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } };
 
 export default function Home() {
   const [activeIndex, setActiveIndex] = useState(0);
+  const videoChangeCountRef = useRef(0);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
+  // Every 2 video swaps, advance headline
+  const handleVideoChange = useCallback(() => {
+    videoChangeCountRef.current += 1;
+    if (videoChangeCountRef.current % VIDEOS_PER_HEADLINE === 0) {
       setActiveIndex((prev) => (prev + 1) % HEADLINES.length);
-    }, 5000);
-    return () => clearInterval(timer);
+    }
   }, []);
 
-  // Get 3 visible cards: previous, active (center), next
   const getIndex = (offset: number) =>
     (activeIndex + offset + HEADLINES.length) % HEADLINES.length;
 
@@ -39,10 +42,10 @@ export default function Home() {
     <div className="relative h-screen overflow-hidden bg-black">
       {/* Video Background */}
       <div className="absolute inset-0">
-        <HeroVideoCarousel />
+        <HeroVideoCarousel onVideoChange={handleVideoChange} />
       </div>
 
-      <div className="relative z-10 h-full flex flex-col">
+      <div className="relative z-10 h-full flex flex-col" style={{ zIndex: 20 }}>
         {/* Hero */}
         <div className="flex-1 flex items-center justify-center px-4 pb-8">
           <div className="text-center">
@@ -114,7 +117,7 @@ export default function Home() {
                       zIndex: z,
                     }}
                     exit={{ opacity: 0, scale: 0.8 }}
-                    transition={{ duration: 0.5, ease: 'easeInOut' }}
+                    transition={{ duration: 0.8, ease: 'easeInOut' }}
                     className="absolute top-0 left-1/2 w-[320px] sm:w-[380px] -ml-[160px] sm:-ml-[190px]"
                   >
                     <Link

@@ -9,9 +9,13 @@ const VIDEO_SOURCES = [heroVideo4, heroVideo3, heroVideo2, heroVideo1]
 
 const CROSSFADE_DURATION = 1200
 const END_THRESHOLD = 0.5
-const PREBUFFER_THRESHOLD = 3 // seconds before end to start loading next
+const PREBUFFER_THRESHOLD = 3
 
-export function HeroVideoCarousel() {
+interface HeroVideoCarouselProps {
+  onVideoChange?: (videoIndex: number) => void
+}
+
+export function HeroVideoCarousel({ onVideoChange }: HeroVideoCarouselProps) {
   const videoARef = useRef<HTMLVideoElement>(null)
   const videoBRef = useRef<HTMLVideoElement>(null)
   const [activeSlot, setActiveSlot] = useState<'A' | 'B'>('A')
@@ -32,7 +36,7 @@ export function HeroVideoCarousel() {
     return activeSlot === 'A' ? videoBRef.current : videoARef.current
   }, [activeSlot])
 
-  // Initial setup: load first video into slot A, prebuffer second into slot B
+  // Initial setup
   useEffect(() => {
     const videoA = videoARef.current
     const videoB = videoBRef.current
@@ -51,7 +55,7 @@ export function HeroVideoCarousel() {
     }
   }, [getNextIndex])
 
-  // Autoplay active video with mobile fallbacks
+  // Autoplay with mobile fallbacks
   useEffect(() => {
     const activeVideo = getActiveVideo()
     if (!activeVideo) return
@@ -88,10 +92,9 @@ export function HeroVideoCarousel() {
     }
   }, [activeSlot, getActiveVideo])
 
-  // Crossfade: prebuffer next video early, then swap slots near end
+  // Crossfade logic
   useEffect(() => {
     if (VIDEO_SOURCES.length <= 1) {
-      // Single video: just loop it
       const video = videoARef.current
       if (video) video.loop = true
       return
@@ -108,11 +111,9 @@ export function HeroVideoCarousel() {
       if (!activeVideo.duration || activeVideo.duration === 0) return
       const remaining = activeVideo.duration - activeVideo.currentTime
 
-      // Prebuffer: load next video source well before crossfade
       if (!prebufferedRef.current && remaining <= PREBUFFER_THRESHOLD) {
         prebufferedRef.current = true
         const nextIdx = getNextIndex(currentIndexRef.current)
-        // Only reload if src changed
         const nextSrc = VIDEO_SOURCES[nextIdx]
         if (!inactiveVideo.src.endsWith(nextSrc.split('/').pop() || '')) {
           inactiveVideo.src = nextSrc
@@ -123,27 +124,27 @@ export function HeroVideoCarousel() {
         inactiveVideo.currentTime = 0
       }
 
-      // Crossfade trigger
       if (!crossfadeTriggeredRef.current && remaining <= END_THRESHOLD) {
         crossfadeTriggeredRef.current = true
 
-        // Start playing the prebuffered inactive video
         const p = inactiveVideo.play()
         if (p) p.catch(() => {})
 
         const nextIdx = getNextIndex(currentIndexRef.current)
         currentIndexRef.current = nextIdx
 
-        // Swap active slot — CSS transition handles the fade
+        // Notify parent of video change
+        onVideoChange?.(nextIdx)
+
         setActiveSlot((prev) => (prev === 'A' ? 'B' : 'A'))
       }
     }
 
     activeVideo.addEventListener('timeupdate', handleTimeUpdate)
     return () => activeVideo.removeEventListener('timeupdate', handleTimeUpdate)
-  }, [activeSlot, getActiveVideo, getInactiveVideo, getNextIndex])
+  }, [activeSlot, getActiveVideo, getInactiveVideo, getNextIndex, onVideoChange])
 
-  // After crossfade completes, prebuffer the NEXT next video into the now-inactive slot
+  // Prebuffer next-next video after crossfade
   useEffect(() => {
     if (VIDEO_SOURCES.length <= 2) return
 
@@ -151,7 +152,6 @@ export function HeroVideoCarousel() {
       const inactiveVideo = getInactiveVideo()
       if (!inactiveVideo) return
       const nextNextIdx = getNextIndex(getNextIndex(currentIndexRef.current - 1 < 0 ? VIDEO_SOURCES.length - 1 : currentIndexRef.current - 1))
-      // Don't reload if it's already loaded
       const src = VIDEO_SOURCES[nextNextIdx]
       if (!inactiveVideo.src.endsWith(src.split('/').pop() || '')) {
         inactiveVideo.src = src
@@ -164,17 +164,21 @@ export function HeroVideoCarousel() {
     return () => clearTimeout(timeout)
   }, [activeSlot, getInactiveVideo, getNextIndex])
 
+  const videoStyle = (slot: 'A' | 'B') => ({
+    opacity: activeSlot === slot ? 1 : 0,
+    transition: `opacity ${CROSSFADE_DURATION}ms ease-in-out`,
+    zIndex: activeSlot === slot ? 2 : 1,
+    pointerEvents: 'none' as const,
+    transform: 'scale(1.05)',
+    transformOrigin: 'center center',
+  })
+
   return (
     <>
       <video
         ref={videoARef}
         className="absolute inset-0 w-full h-full object-cover"
-        style={{
-          opacity: activeSlot === 'A' ? 1 : 0,
-          transition: `opacity ${CROSSFADE_DURATION}ms ease-in-out`,
-          zIndex: activeSlot === 'A' ? 2 : 1,
-          pointerEvents: 'none',
-        }}
+        style={videoStyle('A')}
         muted
         playsInline
         preload="auto"
@@ -183,12 +187,7 @@ export function HeroVideoCarousel() {
       <video
         ref={videoBRef}
         className="absolute inset-0 w-full h-full object-cover"
-        style={{
-          opacity: activeSlot === 'B' ? 1 : 0,
-          transition: `opacity ${CROSSFADE_DURATION}ms ease-in-out`,
-          zIndex: activeSlot === 'B' ? 2 : 1,
-          pointerEvents: 'none',
-        }}
+        style={videoStyle('B')}
         muted
         playsInline
         preload="auto"
