@@ -12,35 +12,41 @@ const HEADLINES = [
   { id: 6, title: 'Recovery Operations', subtitle: 'Recovery operations in progress', source: 'The Guardian', slug: 'recovery-ops' },
 ];
 
-const ITEMS_PER_VIEW = 3;
-const TOTAL_PAGES = Math.ceil(HEADLINES.length / ITEMS_PER_VIEW);
-
 const fade = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } };
 
 export default function Home() {
-  const [activePage, setActivePage] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(0);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setActivePage((prev) => (prev + 1) % TOTAL_PAGES);
-    }, 8000);
+      setActiveIndex((prev) => (prev + 1) % HEADLINES.length);
+    }, 5000);
     return () => clearInterval(timer);
   }, []);
 
-  const currentItems = HEADLINES.slice(
-    activePage * ITEMS_PER_VIEW,
-    activePage * ITEMS_PER_VIEW + ITEMS_PER_VIEW
-  );
+  // Get 3 visible cards: previous, active (center), next
+  const getIndex = (offset: number) =>
+    (activeIndex + offset + HEADLINES.length) % HEADLINES.length;
+
+  const positions = [
+    { offset: -1, scale: 0.85, x: '-60%', z: 1, opacity: 0.5 },
+    { offset: 0, scale: 1, x: '0%', z: 10, opacity: 1 },
+    { offset: 1, scale: 0.85, x: '60%', z: 1, opacity: 0.5 },
+  ];
 
   return (
     <div className="relative h-screen overflow-hidden bg-black">
-      {/* Subtle gradient background */}
-      <div className="absolute inset-0" style={{ background: 'linear-gradient(135deg, hsl(220,20%,8%) 0%, hsl(240,15%,12%) 50%, hsl(220,18%,10%) 100%)' }} />
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            'linear-gradient(135deg, hsl(220,20%,8%) 0%, hsl(240,15%,12%) 50%, hsl(220,18%,10%) 100%)',
+        }}
+      />
 
-      {/* Content layer */}
       <div className="relative z-10 h-full flex flex-col">
-        {/* Hero — vertically centered with slight upward offset for visual balance */}
-        <div className="flex-1 flex items-center justify-center px-4 pb-16">
+        {/* Hero */}
+        <div className="flex-1 flex items-center justify-center px-4 pb-8">
           <div className="text-center">
             <motion.h1
               initial="hidden"
@@ -49,7 +55,9 @@ export default function Home() {
               transition={{ duration: 0.6 }}
               className="font-heading text-5xl sm:text-6xl md:text-7xl font-light text-white tracking-tight leading-none"
             >
-              HARBOR
+              FIND AID.
+              <br />
+              STAY SAFE.
             </motion.h1>
 
             <motion.p
@@ -57,9 +65,9 @@ export default function Home() {
               animate="visible"
               variants={fade}
               transition={{ duration: 0.6, delay: 0.15 }}
-              className="mt-4 text-sm tracking-[0.2em] uppercase text-white/50"
+              className="mt-5 text-sm tracking-[0.2em] uppercase text-white/40"
             >
-              Global Disaster Insight
+              Real-time disaster tracking &amp; relief resources
             </motion.p>
 
             <motion.div
@@ -86,52 +94,64 @@ export default function Home() {
           </div>
         </div>
 
-        {/* News carousel — bottom third */}
-        <div className="px-4 sm:px-8 pb-10 pt-4">
-          <div className="max-w-7xl mx-auto">
-            <div className="flex items-end justify-between mb-5">
-              <h2 className="font-heading text-xl sm:text-2xl font-light text-white tracking-tight">
-                Latest Headlines
-              </h2>
-              <div className="flex gap-2">
-                {Array.from({ length: TOTAL_PAGES }).map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setActivePage(i)}
-                    className={`w-8 h-1 transition-colors ${
-                      i === activePage ? 'bg-white' : 'bg-white/25'
-                    }`}
-                  />
-                ))}
-              </div>
-            </div>
+        {/* Carousel — 3D rotating cards */}
+        <div className="pb-12 pt-2 px-4">
+          <h2 className="font-heading text-xl sm:text-2xl font-light text-white tracking-tight text-center mb-8">
+            Latest Headlines
+          </h2>
 
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activePage}
-                initial={{ opacity: 0, x: 40 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -40 }}
-                transition={{ duration: 0.4 }}
-                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"
-              >
-                {currentItems.map((item) => (
-                  <Link
-                    key={item.id}
-                    to={`/headlines/${item.slug}`}
-                    className="h-48 border border-white/15 bg-white/5 backdrop-blur-sm flex flex-col justify-end p-6 hover:bg-white/10 transition-colors cursor-pointer group"
+          <div className="relative h-56 max-w-4xl mx-auto">
+            <AnimatePresence mode="popLayout">
+              {positions.map(({ offset, scale, x, z, opacity }) => {
+                const idx = getIndex(offset);
+                const item = HEADLINES[idx];
+                return (
+                  <motion.div
+                    key={`${item.id}-${offset}`}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{
+                      opacity,
+                      scale,
+                      x,
+                      zIndex: z,
+                    }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    transition={{ duration: 0.5, ease: 'easeInOut' }}
+                    className="absolute top-0 left-1/2 w-[320px] sm:w-[380px] -ml-[160px] sm:-ml-[190px]"
                   >
-                    <span className="text-[10px] tracking-[0.2em] uppercase text-white/35 mb-2">
-                      {item.source}
-                    </span>
-                    <h3 className="font-heading text-lg font-semibold text-white mb-1 group-hover:text-white/90">
-                      {item.title}
-                    </h3>
-                    <p className="text-sm text-white/50">{item.subtitle}</p>
-                  </Link>
-                ))}
-              </motion.div>
+                    <Link
+                      to={`/headlines/${item.slug}`}
+                      className={`block h-52 border border-white/15 backdrop-blur-sm flex flex-col justify-end p-6 transition-colors cursor-pointer group ${
+                        offset === 0
+                          ? 'bg-white/10 hover:bg-white/15'
+                          : 'bg-white/5 pointer-events-none'
+                      }`}
+                    >
+                      <span className="text-[10px] tracking-[0.2em] uppercase text-white/35 mb-2">
+                        {item.source}
+                      </span>
+                      <h3 className="font-heading text-lg font-semibold text-white mb-1">
+                        {item.title}
+                      </h3>
+                      <p className="text-sm text-white/50">{item.subtitle}</p>
+                    </Link>
+                  </motion.div>
+                );
+              })}
             </AnimatePresence>
+          </div>
+
+          {/* Dots */}
+          <div className="flex justify-center gap-2 mt-6">
+            {HEADLINES.map((_, i) => (
+              <button
+                key={i}
+                onClick={() => setActiveIndex(i)}
+                className={`w-2 h-2 transition-colors ${
+                  i === activeIndex ? 'bg-white' : 'bg-white/25'
+                }`}
+              />
+            ))}
           </div>
         </div>
       </div>
