@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useRef, useEffect, useCallback, useState } from 'react'
 
 import heroVideo1 from '@/assets/hero-video-1.mp4'
 import heroVideo2 from '@/assets/hero-video-2.mp4'
@@ -9,33 +9,51 @@ const VIDEO_SOURCES = [heroVideo4, heroVideo3, heroVideo2, heroVideo1]
 
 const CROSSFADE_DURATION = 1200
 const END_THRESHOLD = 0.5
+const PREBUFFER_THRESHOLD = 3 // seconds before end to start loading next
 
 export function HeroVideoCarousel() {
   const videoARef = useRef<HTMLVideoElement>(null)
   const videoBRef = useRef<HTMLVideoElement>(null)
   const [activeSlot, setActiveSlot] = useState<'A' | 'B'>('A')
-  const [currentIndex, setCurrentIndex] = useState(0)
+  const currentIndexRef = useRef(0)
   const crossfadeTriggeredRef = useRef(false)
+  const prebufferedRef = useRef(false)
 
   const getNextIndex = useCallback(
     (idx: number) => (idx + 1) % VIDEO_SOURCES.length,
     []
   )
 
+  const getActiveVideo = useCallback(() => {
+    return activeSlot === 'A' ? videoARef.current : videoBRef.current
+  }, [activeSlot])
+
+  const getInactiveVideo = useCallback(() => {
+    return activeSlot === 'A' ? videoBRef.current : videoARef.current
+  }, [activeSlot])
+
+  // Initial setup: load first video into slot A, prebuffer second into slot B
   useEffect(() => {
-    if (videoARef.current) {
-      videoARef.current.src = VIDEO_SOURCES[0]
-      videoARef.current.load()
-    }
-    if (videoBRef.current && VIDEO_SOURCES.length > 1) {
-      videoBRef.current.src = VIDEO_SOURCES[getNextIndex(0)]
-      videoBRef.current.load()
+    const videoA = videoARef.current
+    const videoB = videoBRef.current
+    if (!videoA) return
+
+    videoA.src = VIDEO_SOURCES[0]
+    videoA.load()
+    videoA.muted = true
+    videoA.volume = 0
+
+    if (videoB && VIDEO_SOURCES.length > 1) {
+      videoB.src = VIDEO_SOURCES[getNextIndex(0)]
+      videoB.load()
+      videoB.muted = true
+      videoB.volume = 0
     }
   }, [getNextIndex])
 
-  // Autoplay with mobile fallbacks
+  // Autoplay active video with mobile fallbacks
   useEffect(() => {
-    const activeVideo = activeSlot === 'A' ? videoARef.current : videoBRef.current
+    const activeVideo = getActiveVideo()
     if (!activeVideo) return
 
     const tryPlay = () => {
@@ -68,40 +86,83 @@ export function HeroVideoCarousel() {
       document.removeEventListener('touchstart', handleInteraction)
       document.removeEventListener('click', handleInteraction)
     }
-  }, [activeSlot])
+  }, [activeSlot, getActiveVideo])
 
-  // Crossfade logic
+  // Crossfade: prebuffer next video early, then swap slots near end
   useEffect(() => {
-    if (VIDEO_SOURCES.length <= 1) return
+    if (VIDEO_SOURCES.length <= 1) {
+      // Single video: just loop it
+      const video = videoARef.current
+      if (video) video.loop = true
+      return
+    }
 
-    const activeVideo = activeSlot === 'A' ? videoARef.current : videoBRef.current
-    const inactiveVideo = activeSlot === 'A' ? videoBRef.current : videoARef.current
+    const activeVideo = getActiveVideo()
+    const inactiveVideo = getInactiveVideo()
     if (!activeVideo || !inactiveVideo) return
 
     crossfadeTriggeredRef.current = false
+    prebufferedRef.current = false
 
     const handleTimeUpdate = () => {
-      if (crossfadeTriggeredRef.current) return
+      if (!activeVideo.duration || activeVideo.duration === 0) return
       const remaining = activeVideo.duration - activeVideo.currentTime
-      if (remaining <= END_THRESHOLD && activeVideo.duration > 0) {
-        crossfadeTriggeredRef.current = true
 
-        const nextIdx = getNextIndex(currentIndex)
-        inactiveVideo.src = VIDEO_SOURCES[nextIdx]
-        inactiveVideo.load()
+      // Prebuffer: load next video source well before crossfade
+      if (!prebufferedRef.current && remaining <= PREBUFFER_THRESHOLD) {
+        prebufferedRef.current = true
+        const nextIdx = getNextIndex(currentIndexRef.current)
+        // Only reload if src changed
+        const nextSrc = VIDEO_SOURCES[nextIdx]
+        if (!inactiveVideo.src.endsWith(nextSrc.split('/').pop() || '')) {
+          inactiveVideo.src = nextSrc
+          inactiveVideo.load()
+        }
         inactiveVideo.muted = true
         inactiveVideo.volume = 0
+        inactiveVideo.currentTime = 0
+      }
+
+      // Crossfade trigger
+      if (!crossfadeTriggeredRef.current && remaining <= END_THRESHOLD) {
+        crossfadeTriggeredRef.current = true
+
+        // Start playing the prebuffered inactive video
         const p = inactiveVideo.play()
         if (p) p.catch(() => {})
 
+        const nextIdx = getNextIndex(currentIndexRef.current)
+        currentIndexRef.current = nextIdx
+
+        // Swap active slot — CSS transition handles the fade
         setActiveSlot((prev) => (prev === 'A' ? 'B' : 'A'))
-        setCurrentIndex(nextIdx)
       }
     }
 
     activeVideo.addEventListener('timeupdate', handleTimeUpdate)
     return () => activeVideo.removeEventListener('timeupdate', handleTimeUpdate)
-  }, [activeSlot, currentIndex, getNextIndex])
+  }, [activeSlot, getActiveVideo, getInactiveVideo, getNextIndex])
+
+  // After crossfade completes, prebuffer the NEXT next video into the now-inactive slot
+  useEffect(() => {
+    if (VIDEO_SOURCES.length <= 2) return
+
+    const timeout = setTimeout(() => {
+      const inactiveVideo = getInactiveVideo()
+      if (!inactiveVideo) return
+      const nextNextIdx = getNextIndex(getNextIndex(currentIndexRef.current - 1 < 0 ? VIDEO_SOURCES.length - 1 : currentIndexRef.current - 1))
+      // Don't reload if it's already loaded
+      const src = VIDEO_SOURCES[nextNextIdx]
+      if (!inactiveVideo.src.endsWith(src.split('/').pop() || '')) {
+        inactiveVideo.src = src
+        inactiveVideo.load()
+        inactiveVideo.muted = true
+        inactiveVideo.volume = 0
+      }
+    }, CROSSFADE_DURATION + 500)
+
+    return () => clearTimeout(timeout)
+  }, [activeSlot, getInactiveVideo, getNextIndex])
 
   return (
     <>
