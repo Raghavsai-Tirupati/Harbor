@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
-import { MapPin, ChevronLeft, ChevronRight, Menu, X } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { MapPin, ChevronLeft, ChevronRight } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { HeroVideoCarousel } from '@/components/HeroVideoCarousel';
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 
 const HEADLINES = [
   { id: 1, title: 'Earthquake Response', subtitle: 'Breaking disaster news updates', source: 'Reuters', slug: 'earthquake-response' },
@@ -13,21 +13,13 @@ const HEADLINES = [
   { id: 6, title: 'Recovery Operations', subtitle: 'Recovery operations in progress', source: 'The Guardian', slug: 'recovery-ops' },
 ];
 
-const SIDEBAR_LINKS = [
-  { to: '/', label: 'Home' },
-  { to: '/map', label: 'Disaster Map' },
-  { to: '/trends', label: 'News' },
-  { to: '/resources', label: 'Aid Resources' },
-  { to: '/about', label: 'Our Mission' },
-];
-
 const VIDEOS_PER_HEADLINE = 2;
+const AUTO_ROTATE_MS = 4000;
 
-const fade = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } };
+const fade = { hidden: { opacity: 0, y: 12 }, visible: { opacity: 1, y: 0 } };
 
 export default function Home() {
   const [activeIndex, setActiveIndex] = useState(0);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const videoChangeCountRef = useRef(0);
 
   // Every 2 video swaps, advance headline
@@ -38,196 +30,158 @@ export default function Home() {
     }
   }, []);
 
-  const getIndex = (offset: number) =>
-    (activeIndex + offset + HEADLINES.length) % HEADLINES.length;
+  // Auto-rotate carousel
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setActiveIndex((prev) => (prev + 1) % HEADLINES.length);
+    }, AUTO_ROTATE_MS);
+    return () => clearInterval(timer);
+  }, []);
 
-  const positions = [
-    { offset: -1, scale: 0.85, x: '-60%', z: 1, opacity: 0.5 },
-    { offset: 0, scale: 1, x: '0%', z: 10, opacity: 1 },
-    { offset: 1, scale: 0.85, x: '60%', z: 1, opacity: 0.5 },
-  ];
+  // For each card, compute its offset from center (-1=left, 0=center, 1=right, else hidden)
+  const getOffset = (itemIndex: number) => {
+    let diff = itemIndex - activeIndex;
+    const half = Math.floor(HEADLINES.length / 2);
+    // Wrap around for shortest path
+    if (diff > half) diff -= HEADLINES.length;
+    if (diff < -half) diff += HEADLINES.length;
+    return diff;
+  };
+
+  const getSlotStyle = (offset: number) => {
+    if (offset === 0) return { x: 0, scale: 1, opacity: 1, zIndex: 10 };
+    if (offset === -1) return { x: -220, scale: 0.85, opacity: 0.4, zIndex: 5 };
+    if (offset === 1) return { x: 220, scale: 0.85, opacity: 0.4, zIndex: 5 };
+    // Off-screen cards: slide further out in the direction they're heading
+    if (offset <= -2) return { x: -400, scale: 0.75, opacity: 0, zIndex: 1 };
+    return { x: 400, scale: 0.75, opacity: 0, zIndex: 1 };
+  };
 
   return (
-    <div className="relative h-screen overflow-hidden bg-black">
-      {/* Video Background */}
-      <div className="absolute inset-0">
+    <div className="relative w-full h-screen overflow-hidden bg-black">
+      {/* Video Background — full window */}
+      <div className="absolute inset-0 w-full h-full">
         <HeroVideoCarousel onVideoChange={handleVideoChange} />
-        {/* Bottom gradient fade to black */}
-        <div className="absolute bottom-0 left-0 right-0 h-48 bg-gradient-to-t from-black to-transparent z-[5]" />
+        <div className="absolute bottom-0 left-0 right-0 h-40 bg-gradient-to-t from-black/80 to-transparent z-[5]" />
       </div>
 
-      <div className="relative z-10 h-full flex flex-col" style={{ zIndex: 20 }}>
-        {/* Hero */}
-        <div className="flex-1 flex items-center justify-center px-4 pb-8">
-          <div className="text-center">
-            <motion.h1
-              initial="hidden"
-              animate="visible"
-              variants={fade}
-              transition={{ duration: 0.6 }}
-              className="font-heading text-5xl sm:text-6xl md:text-7xl font-light text-white tracking-tight leading-none"
-            >
-              FIND AID.
-              <br />
-              STAY SAFE.
-            </motion.h1>
+      {/* Content overlay */}
+      <div className="relative z-20 h-full flex flex-col items-center justify-center px-4">
+        {/* Hero text — centered, smaller */}
+        <div className="text-center mb-auto mt-auto">
+          <motion.h1
+            initial="hidden"
+            animate="visible"
+            variants={fade}
+            transition={{ duration: 0.6 }}
+            className="font-heading text-3xl sm:text-4xl md:text-5xl font-light text-white tracking-tight leading-tight"
+          >
+            FIND AID.
+            <br />
+            STAY SAFE.
+          </motion.h1>
 
-            <motion.p
-              initial="hidden"
-              animate="visible"
-              variants={fade}
-              transition={{ duration: 0.6, delay: 0.15 }}
-              className="mt-5 text-sm tracking-[0.2em] uppercase text-white/40"
-            >
-              Real-time disaster tracking &amp; relief resources
-            </motion.p>
+          <motion.p
+            initial="hidden"
+            animate="visible"
+            variants={fade}
+            transition={{ duration: 0.6, delay: 0.15 }}
+            className="mt-3 text-xs sm:text-sm tracking-[0.15em] uppercase text-white/40"
+          >
+            Real-time disaster tracking &amp; relief resources
+          </motion.p>
 
-            <motion.div
-              initial="hidden"
-              animate="visible"
-              variants={fade}
-              transition={{ duration: 0.6, delay: 0.3 }}
-              className="mt-12 flex items-center justify-center"
+          <motion.div
+            initial="hidden"
+            animate="visible"
+            variants={fade}
+            transition={{ duration: 0.6, delay: 0.3 }}
+            className="mt-8"
+          >
+            <Link
+              to="/map"
+              className="inline-flex items-center justify-center gap-2 px-8 py-3 text-xs font-semibold tracking-[0.15em] uppercase bg-white/15 backdrop-blur-sm border border-white/20 text-white hover:bg-white/25 transition-colors"
             >
-              <Link
-                to="/map"
-                className="w-72 py-5 text-center text-sm font-semibold tracking-[0.2em] uppercase bg-white/20 backdrop-blur-sm border border-white/30 text-white hover:bg-white/30 transition-colors flex items-center justify-center gap-2"
-              >
-                <MapPin className="h-4 w-4" />
-                DISASTER MAP
-              </Link>
-            </motion.div>
-          </div>
+              <MapPin className="h-3.5 w-3.5" />
+              DISASTER MAP
+            </Link>
+          </motion.div>
         </div>
 
-        {/* Carousel — 3D rotating cards */}
-        <div className="pb-12 pt-2 px-4">
-          <Link to="/trends" className="block">
-            <h2 className="font-heading text-xl sm:text-2xl font-light text-white tracking-tight text-center mb-8 hover:text-white/70 transition-colors">
+        {/* Carousel — bottom area */}
+        <div className="w-full pb-8 sm:pb-12 pt-4">
+          <Link to="/news" className="block">
+            <h2 className="font-heading text-base sm:text-lg font-light text-white/80 tracking-tight text-center mb-6 hover:text-white transition-colors">
               Latest Headlines
             </h2>
           </Link>
 
-          <div className="relative h-56 max-w-4xl mx-auto">
-            <AnimatePresence mode="popLayout">
-              {positions.map(({ offset, scale, x, z, opacity }) => {
-                const idx = getIndex(offset);
-                const item = HEADLINES[idx];
-                return (
-                  <motion.div
-                    key={`${item.id}-${offset}`}
-                    initial={{ opacity: 0, scale: 0.8 }}
-                    animate={{
-                      opacity,
-                      scale,
-                      x,
-                      zIndex: z,
-                    }}
-                    exit={{ opacity: 0, scale: 0.8 }}
-                    transition={{ duration: 0.8, ease: 'easeInOut' }}
-                    className="absolute top-0 left-1/2 w-[320px] sm:w-[380px] -ml-[160px] sm:-ml-[190px]"
+          <div className="relative h-40 sm:h-44 max-w-3xl mx-auto overflow-hidden">
+            {HEADLINES.map((item, i) => {
+              const offset = getOffset(i);
+              const slot = getSlotStyle(offset);
+              return (
+                <motion.div
+                  key={item.id}
+                  animate={{
+                    x: slot.x,
+                    scale: slot.scale,
+                    opacity: slot.opacity,
+                    zIndex: slot.zIndex,
+                  }}
+                  transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
+                  className="absolute top-0 left-1/2 w-[260px] sm:w-[300px] -ml-[130px] sm:-ml-[150px]"
+                >
+                  <div
+                    className={`block h-36 sm:h-40 border border-white/10 backdrop-blur-sm flex flex-col justify-end p-4 sm:p-5 ${
+                      offset === 0
+                        ? 'bg-white/10'
+                        : 'bg-white/5 pointer-events-none'
+                    }`}
                   >
-                    <Link
-                      to={`/headlines/${item.slug}`}
-                      className={`block h-52 border border-white/15 backdrop-blur-sm flex flex-col justify-end p-6 transition-colors cursor-pointer group ${
-                        offset === 0
-                          ? 'bg-white/10 hover:bg-white/15'
-                          : 'bg-white/5 pointer-events-none'
-                      }`}
-                    >
-                      <span className="text-[10px] tracking-[0.2em] uppercase text-white/35 mb-2">
-                        {item.source}
-                      </span>
-                      <h3 className="font-heading text-lg font-semibold text-white mb-1">
-                        {item.title}
-                      </h3>
-                      <p className="text-sm text-white/50">{item.subtitle}</p>
-                    </Link>
-                  </motion.div>
-                );
-              })}
-            </AnimatePresence>
+                    <span className="text-[9px] tracking-[0.15em] uppercase text-white/30 mb-1.5">
+                      {item.source}
+                    </span>
+                    <h3 className="font-heading text-sm sm:text-base font-semibold text-white mb-0.5">
+                      {item.title}
+                    </h3>
+                    <p className="text-xs text-white/45">{item.subtitle}</p>
+                  </div>
+                </motion.div>
+              );
+            })}
           </div>
 
-          {/* Arrows + Dots */}
-          <div className="flex items-center justify-center gap-4 mt-6">
+          {/* Dots + arrows */}
+          <div className="flex items-center justify-center gap-3 mt-4">
             <button
               onClick={() => setActiveIndex((prev) => (prev - 1 + HEADLINES.length) % HEADLINES.length)}
-              className="p-2 text-white/50 hover:text-white transition-colors"
+              className="p-1.5 text-white/40 hover:text-white transition-colors"
               aria-label="Previous headline"
             >
-              <ChevronLeft className="h-5 w-5" />
+              <ChevronLeft className="h-4 w-4" />
             </button>
-            <div className="flex gap-2">
+            <div className="flex gap-1.5">
               {HEADLINES.map((_, i) => (
                 <button
                   key={i}
                   onClick={() => setActiveIndex(i)}
-                  className={`w-2 h-2 transition-colors ${
-                    i === activeIndex ? 'bg-white' : 'bg-white/25'
+                  className={`w-1.5 h-1.5 transition-all ${
+                    i === activeIndex ? 'bg-white scale-125' : 'bg-white/20'
                   }`}
                 />
               ))}
             </div>
             <button
               onClick={() => setActiveIndex((prev) => (prev + 1) % HEADLINES.length)}
-              className="p-2 text-white/50 hover:text-white transition-colors"
+              className="p-1.5 text-white/40 hover:text-white transition-colors"
               aria-label="Next headline"
             >
-              <ChevronRight className="h-5 w-5" />
+              <ChevronRight className="h-4 w-4" />
             </button>
           </div>
         </div>
       </div>
-
-      {/* Menu trigger — top right, hover to open */}
-      <div
-        className="fixed top-4 right-6 z-[60]"
-        onMouseEnter={() => setSidebarOpen(true)}
-      >
-        <div className="p-2 text-white/60 hover:text-white transition-colors cursor-pointer">
-          <Menu className="h-6 w-6" />
-        </div>
-      </div>
-
-      {/* Sidebar overlay + panel */}
-      <AnimatePresence>
-        {sidebarOpen && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.25 }}
-              className="fixed inset-0 bg-black/50 z-40"
-              onClick={() => setSidebarOpen(false)}
-            />
-            <motion.div
-              initial={{ x: '100%' }}
-              animate={{ x: 0 }}
-              exit={{ x: '100%' }}
-              transition={{ duration: 0.3, ease: 'easeInOut' }}
-              className="fixed top-0 right-0 h-full w-3/4 sm:w-1/4 min-w-[260px] bg-black/85 backdrop-blur-xl border-l border-white/10 z-50 flex flex-col"
-            >
-              <div className="flex items-center p-6 border-b border-white/10">
-                <span className="font-heading text-sm tracking-[0.15em] uppercase text-white/50">Menu</span>
-              </div>
-              <nav className="flex-1 p-4 space-y-1">
-                {SIDEBAR_LINKS.map((link) => (
-                  <Link
-                    key={link.to}
-                    to={link.to}
-                    onClick={() => setSidebarOpen(false)}
-                    className="block py-3.5 px-4 font-heading text-sm font-semibold tracking-[0.15em] uppercase text-white/60 hover:text-white hover:bg-white/5 transition-colors"
-                  >
-                    {link.label}
-                  </Link>
-                ))}
-              </nav>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

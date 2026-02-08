@@ -33,10 +33,10 @@ const insights = [
 
 export default function Trends() {
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12">
-      <div className="mb-12">
-        <h1 className="font-heading text-3xl md:text-4xl font-bold">Trends & Insights</h1>
-        <p className="text-muted-foreground mt-2">Global disaster patterns and data analysis.</p>
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-24 pb-16">
+      <div className="mb-8">
+        <h1 className="font-heading text-2xl md:text-3xl font-bold">Trends & Insights</h1>
+        <p className="text-sm text-muted-foreground mt-1">Global disaster patterns and data analysis.</p>
       </div>
 
       {/* Charts Grid */}

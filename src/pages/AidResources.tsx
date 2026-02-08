@@ -30,7 +30,7 @@ export default function AidResources() {
   );
 
   return (
-    <div className="flex flex-col lg:flex-row h-[calc(100vh-4rem)]">
+    <div className="flex flex-col lg:flex-row h-screen">
       {/* Map */}
       <div className="flex-1 relative min-h-[300px]">
         <div className="absolute top-4 left-4 z-[1000] bg-card/90 backdrop-blur-md border border-border p-2 flex flex-wrap gap-1">

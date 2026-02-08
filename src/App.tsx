@@ -1,21 +1,28 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, useLocation } from 'react-router-dom';
 import { Navbar } from './components/disaster/Navbar';
 import { Footer } from './components/disaster/Footer';
+import { ScrollToTop } from './components/ScrollToTop';
 import Home from './pages/Home';
 import DisasterMap from './pages/DisasterMap';
+import News from './pages/News';
 import Trends from './pages/Trends';
 import AidResources from './pages/AidResources';
 import About from './pages/About';
 import NotFound from './pages/NotFound';
 
 export default function App() {
+  const { pathname } = useLocation();
+  const isHome = pathname === '/';
+
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
+      <ScrollToTop />
       <Navbar />
       <main className="flex-1">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/map" element={<DisasterMap />} />
+          <Route path="/news" element={<News />} />
           <Route path="/trends" element={<Trends />} />
           <Route path="/resources" element={<AidResources />} />
           <Route path="/about" element={<About />} />

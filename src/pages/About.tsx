@@ -2,8 +2,8 @@ import { ShieldAlert, Database, AlertTriangle } from 'lucide-react';
 
 export default function About() {
   return (
-    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-16">
-      <h1 className="font-heading text-3xl md:text-4xl font-bold mb-8">About & Disclaimer</h1>
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 pt-24 pb-16">
+      <h1 className="font-heading text-2xl md:text-3xl font-bold mb-8">About & Disclaimer</h1>
 
       <div className="space-y-8">
         <div className="bg-card border border-border p-8">

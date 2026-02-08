@@ -19,7 +19,7 @@ export function Footer() {
           <div>
             <h4 className="font-heading font-semibold text-sm text-white mb-3">Navigate</h4>
             <div className="space-y-2">
-              {[{ to: '/map', label: 'Disaster Map' }, { to: '/trends', label: 'Trends' }, { to: '/resources', label: 'Aid Resources' }, { to: '/about', label: 'Our Mission' }].map(l => (
+              {[{ to: '/map', label: 'Disaster Map' }, { to: '/news', label: 'News' }, { to: '/trends', label: 'Trends' }, { to: '/resources', label: 'Aid Resources' }, { to: '/about', label: 'Our Mission' }].map(l => (
                 <Link key={l.to} to={l.to} className="block text-sm text-white/40 hover:text-white transition-colors">{l.label}</Link>
               ))}
             </div>
