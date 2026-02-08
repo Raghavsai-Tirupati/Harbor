@@ -30,36 +30,31 @@ interface Message {
   content: string;
 }
 
-/* ── Gemini REST API call ─────────────────────────────────────────── */
+/* ── AI chat via edge function ─────────────────────────────────────── */
 
-async function callGemini(systemPrompt: string, messages: Message[]): Promise<string> {
-  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!apiKey) return 'Gemini API key not configured. Add VITE_GEMINI_API_KEY to your .env file.';
+async function callAI(systemPrompt: string, messages: Message[]): Promise<string> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+  if (!supabaseUrl || !supabaseKey) return 'Backend not configured.';
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents: messages.map((m) => ({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }],
-        })),
-        generationConfig: { maxOutputTokens: 1024, temperature: 0.7 },
-      }),
+  const res = await fetch(`${supabaseUrl}/functions/v1/chat-ai`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${supabaseKey}`,
+      'apikey': supabaseKey,
     },
-  );
+    body: JSON.stringify({ systemPrompt, messages }),
+  });
 
   if (!res.ok) {
     const errText = await res.text();
-    console.error('Gemini error', res.status, errText);
-    throw new Error(`Gemini API error (${res.status})`);
+    console.error('Chat AI error', res.status, errText);
+    throw new Error(`Chat AI error (${res.status})`);
   }
 
   const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated.';
+  return data.text || 'No response generated.';
 }
 
 /* ── System prompt (includes map-control tool protocol) ───────────── */
@@ -214,7 +209,7 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
     setIsLoading(true);
 
     try {
-      const rawAnswer = await callGemini(buildSystemPrompt(selectedContext, activeEvents), updated);
+      const rawAnswer = await callAI(buildSystemPrompt(selectedContext, activeEvents), updated);
       const { text: displayText, commands } = parseResponse(rawAnswer);
       setMessages((prev) => [...prev, { role: 'assistant', content: displayText }]);
 
