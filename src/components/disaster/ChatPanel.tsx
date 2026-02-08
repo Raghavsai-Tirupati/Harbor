@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, X, MapPin, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
+import { findNearbyResources, RESOURCE_TYPE_LABELS, type NearbyResult } from '@/data/aidResources';
 
 /* ── Shared types ─────────────────────────────────────────────────── */
 
@@ -81,6 +82,17 @@ function buildSystemPrompt(
     '  Use for cities, countries, or any coordinates.',
     '- map.highlightEvent: Zoom to a disaster event and open its info popup.',
     '  Args: {"title":"<exact title from ACTIVE EVENTS list>"}',
+    '- resources.findNearby: Find nearby emergency aid resources.',
+    '  Args: {"lat":<number>,"lon":<number>,"disasterType":"<optional: wildfire|flood|storm|hurricane|blizzard|earthquake>","maxKm":<optional, default 500>}',
+    '  Use when user asks about shelters, aid, resources, help, or emergency services near a location.',
+    '  If user has selected a location on the map, use those coordinates.',
+    '  Returns structured resource list — include name, type, distance, phone, and website in your response.',
+    '- resources.findNearbyFEMA: Find nearby FEMA Disaster Recovery Centers.',
+    '  Args: {"lat":<number>,"lon":<number>,"maxKm":<optional, default 500>,"limit":<optional, default 10>}',
+    '  Use when user specifically asks about FEMA help, FEMA centers, disaster recovery centers, or government disaster assistance.',
+    '  If user has selected a location on the map, use those coordinates.',
+    '  Returns FEMA DRC locations with name, address, hours, and status.',
+    '  You can combine resources.findNearby and resources.findNearbyFEMA in one response for comprehensive results.',
     '',
     'Rules for tool commands:',
     '- ALWAYS write your text response FIRST, then the TOOL_COMMANDS line at the end.',
@@ -170,6 +182,88 @@ function renderMd(text: string): string {
     .replace(/\n/g, '<br/>');
 }
 
+/* ── FEMA nearby API call ─────────────────────────────────────────── */
+
+const FEMA_API_BASE = 'http://localhost:3001';
+
+interface FemaNearbyResource {
+  name: string;
+  type: string;
+  lat: number;
+  lon: number;
+  distanceKm: number;
+  address: string | null;
+  phone: string | null;
+  hours: string | null;
+  status: string;
+  drcType: string | null;
+  url: string;
+}
+
+async function fetchFemaNearby(lat: number, lon: number, maxKm?: number, limit?: number): Promise<{ resources: FemaNearbyResource[]; fallback: any }> {
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+    maxKm: String(maxKm ?? 500),
+    limit: String(limit ?? 10),
+  });
+  const res = await fetch(`${FEMA_API_BASE}/api/fema/nearby?${params}`);
+  if (!res.ok) return { resources: [], fallback: null };
+  return res.json();
+}
+
+function formatFemaResults(resources: FemaNearbyResource[], fallback: any): string {
+  if (resources.length === 0 && fallback) {
+    let text = '\n\n---\n**No FEMA Disaster Recovery Centers found nearby.** Here are national resources:\n\n';
+    for (const s of fallback.suggestions || []) {
+      text += `- **${s.name}**`;
+      if (s.phone) text += ` — Phone: ${s.phone}`;
+      if (s.url) text += `\n  ${s.url}`;
+      text += '\n';
+    }
+    return text;
+  }
+
+  if (resources.length === 0) return '';
+
+  let text = `\n\n---\n**Found ${resources.length} FEMA Disaster Recovery Center${resources.length > 1 ? 's' : ''}:**\n\n`;
+  for (const r of resources) {
+    const status = r.status === 'open' ? '(Open)' : r.status === 'closed' ? '(Closed)' : '';
+    text += `- **${r.name}** ${status} — ${r.distanceKm} km away`;
+    if (r.address) text += `\n  Address: ${r.address}`;
+    if (r.hours) text += `\n  Hours: ${r.hours}`;
+    if (r.drcType) text += `\n  Type: ${r.drcType}`;
+    text += `\n  FEMA Assistance: ${r.url}`;
+    text += '\n';
+  }
+  return text;
+}
+
+/* ── Format resource results for chat display ─────────────────────── */
+
+function formatResourceResults(results: NearbyResult[]): string {
+  if (results.length === 0) return '';
+
+  const isFallback = results.every((r) => ['r01', 'r02', 'r03'].includes(r.id));
+  let text = '\n\n---\n';
+
+  if (isFallback) {
+    text += '**No local resources found nearby.** Here are national resources that can help:\n\n';
+  } else {
+    text += `**Found ${results.length} nearby resource${results.length > 1 ? 's' : ''}:**\n\n`;
+  }
+
+  for (const r of results) {
+    const typeLabel = RESOURCE_TYPE_LABELS[r.type] || r.type;
+    text += `- **${r.name}** (${typeLabel}) — ${Math.round(r.distanceKm)} km away`;
+    if (r.phone) text += `\n  Phone: ${r.phone}`;
+    if (r.website) text += `\n  Website: ${r.website}`;
+    text += '\n';
+  }
+
+  return text;
+}
+
 /* ════════════════════════════════════════════════════════════════════ */
 
 interface ChatPanelProps {
@@ -204,7 +298,31 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
     try {
       const rawAnswer = await callAI(buildSystemPrompt(selectedContext, activeEvents), updated);
       const { text: displayText, commands } = parseResponse(rawAnswer);
-      setMessages((prev) => [...prev, { role: 'assistant', content: displayText }]);
+
+      /* If resource commands exist, run search client-side and append results */
+      let finalText = displayText;
+      for (const cmd of commands) {
+        if (cmd.tool === 'resources.findNearby') {
+          const { lat, lon, disasterType, maxKm } = cmd.args;
+          if (typeof lat === 'number' && typeof lon === 'number') {
+            const results = findNearbyResources(lat, lon, { disasterType, maxKm });
+            finalText += formatResourceResults(results);
+          }
+        }
+        if (cmd.tool === 'resources.findNearbyFEMA') {
+          const { lat, lon, maxKm, limit } = cmd.args;
+          if (typeof lat === 'number' && typeof lon === 'number') {
+            try {
+              const data = await fetchFemaNearby(lat, lon, maxKm, limit);
+              finalText += formatFemaResults(data.resources, data.fallback);
+            } catch {
+              finalText += '\n\n*Could not reach FEMA data service. Make sure the API server is running (`npm run api`).*';
+            }
+          }
+        }
+      }
+
+      setMessages((prev) => [...prev, { role: 'assistant', content: finalText }]);
 
       /* execute tool commands from the model */
       for (const cmd of commands) {

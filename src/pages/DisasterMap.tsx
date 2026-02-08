@@ -6,6 +6,7 @@ import { supabase } from '@/integrations/supabase/client';
 import harborLogo from '@/assets/harbor-logo.png';
 import { fetchEonet, fetchEarthquakes, fetchEventNews } from '@/lib/disasterApi';
 import ChatPanel, { type MapContext, type ToolCommand, type EventSummary } from '@/components/disaster/ChatPanel';
+import { aidResources, RESOURCE_TYPE_COLORS, RESOURCE_TYPE_LABELS, findNearbyResources, type AidResourceEntry } from '@/data/aidResources';
 
 /* ── Season / prediction constants ────────────────────────────────────── */
 
@@ -237,12 +238,96 @@ const IDLE_RESUME_MS = 10_000;
 
 type FocusEvent = { title: string; sources: { url?: string }[]; lat: number; lon: number; category?: string };
 
+/* ── Aid resources → GeoJSON ──────────────────────────────────────── */
+
+function aidResourcesToGeoJSON(resources?: AidResourceEntry[]): GeoJSON.FeatureCollection {
+  const items = resources ?? aidResources;
+  return {
+    type: 'FeatureCollection',
+    features: items.map((r) => ({
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: [r.lon, r.lat] },
+      properties: {
+        id: r.id,
+        name: r.name,
+        type: r.type,
+        description: r.description,
+        address: r.address,
+        phone: r.phone,
+        website: r.website,
+        disasterTypes: r.disasterTypes.join(', '),
+      },
+    })),
+  };
+}
+
+/* ── Aid resource popup HTML ──────────────────────────────────────── */
+
+function renderAidPopup(props: Record<string, any>): string {
+  const typeLabel = RESOURCE_TYPE_LABELS[props.type as keyof typeof RESOURCE_TYPE_LABELS] || props.type;
+  const color = RESOURCE_TYPE_COLORS[props.type as keyof typeof RESOURCE_TYPE_COLORS] || '#6b7280';
+  let html =
+    `<div style="padding:10px 12px;min-width:240px;max-width:320px;font-family:system-ui,sans-serif;font-size:13px;line-height:1.5">` +
+    `<strong style="color:#f8fafc">${props.name}</strong><br/>` +
+    `<span style="display:inline-block;margin:4px 0;padding:1px 8px;border-radius:9999px;font-size:11px;background:${color}30;color:${color}">${typeLabel}</span><br/>` +
+    `<span style="color:#94a3b8;font-size:12px">${props.description}</span>`;
+  if (props.address) html += `<br/><span style="color:#cbd5e1;font-size:12px">📍 ${props.address}</span>`;
+  if (props.phone) html += `<br/><span style="color:#cbd5e1;font-size:12px">📞 ${props.phone}</span>`;
+  if (props.website) html += `<br/><a href="${props.website}" target="_blank" rel="noopener" style="color:#60a5fa;font-size:12px">${props.website}</a>`;
+  html += `</div>`;
+  return html;
+}
+
+/* ── FEMA DRC constants ────────────────────────────────────────────── */
+
+const FEMA_API_BASE = 'http://localhost:3001';
+const FEMA_DRC_COLOR = '#f97316'; // orange
+
+function renderFemaPopup(props: Record<string, any>): string {
+  const statusColor = props.status === 'open' ? '#22c55e' : props.status === 'closed' ? '#ef4444' : '#6b7280';
+  let html =
+    `<div style="padding:10px 12px;min-width:240px;max-width:320px;font-family:system-ui,sans-serif;font-size:13px;line-height:1.5">` +
+    `<strong style="color:#f8fafc">${props.name || 'FEMA Recovery Center'}</strong><br/>` +
+    `<span style="display:inline-block;margin:4px 0;padding:1px 8px;border-radius:9999px;font-size:11px;background:${FEMA_DRC_COLOR}30;color:${FEMA_DRC_COLOR}">FEMA DRC</span> ` +
+    `<span style="display:inline-block;padding:1px 8px;border-radius:9999px;font-size:11px;background:${statusColor}30;color:${statusColor}">${props.status || 'unknown'}</span>`;
+  if (props.drcType) html += `<br/><span style="color:#94a3b8;font-size:12px">${props.drcType}</span>`;
+  if (props.address) html += `<br/><span style="color:#cbd5e1;font-size:12px">📍 ${props.address}</span>`;
+  if (props.hours) html += `<br/><span style="color:#cbd5e1;font-size:12px">🕐 ${props.hours}</span>`;
+  if (props.notes) html += `<br/><span style="color:#94a3b8;font-size:11px;font-style:italic">${props.notes}</span>`;
+  html += `<br/><a href="https://www.disasterassistance.gov" target="_blank" rel="noopener" style="color:#60a5fa;font-size:12px">FEMA Disaster Assistance</a>`;
+  html += `<br/><span style="color:#64748b;font-size:10px">Source: FEMA OpenFEMA</span>`;
+  html += `</div>`;
+  return html;
+}
+
+async function fetchFemaGeoJSON(bbox?: string): Promise<GeoJSON.FeatureCollection> {
+  const params = new URLSearchParams({ limit: '200' });
+  if (bbox) params.set('bbox', bbox);
+  const res = await fetch(`${FEMA_API_BASE}/api/fema/resources?${params}`);
+  if (!res.ok) throw new Error(`FEMA API ${res.status}`);
+  return res.json();
+}
+
+async function fetchFemaNearby(lat: number, lon: number, maxKm?: number, limit?: number) {
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lon: String(lon),
+    maxKm: String(maxKm ?? 500),
+    limit: String(limit ?? 10),
+  });
+  const res = await fetch(`${FEMA_API_BASE}/api/fema/nearby?${params}`);
+  if (!res.ok) throw new Error(`FEMA nearby API ${res.status}`);
+  return res.json();
+}
+
 export default function DisasterMap() {
   const [mapMode, setMapMode] = useState<'current' | 'predictions'>('current');
   const [seasonFilter, setSeasonFilter] = useState('Summer');
   const [mapError, setMapError] = useState<string | null>(null);
   const [selectedContext, setSelectedContext] = useState<MapContext | null>(null);
   const [activeEvents, setActiveEvents] = useState<EventSummary[]>([]);
+  const [showAidResources, setShowAidResources] = useState(false);
+  const [showFemaResources, setShowFemaResources] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -251,6 +336,8 @@ export default function DisasterMap() {
   const fetchInProgressRef = useRef(false);
   const focusEventRef = useRef<FocusEvent | null>(null);
   const eonetFeaturesRef = useRef<GeoJSON.Feature[]>([]);
+
+  const femaDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* rotation refs */
   const userInteractingRef = useRef(false);
@@ -398,6 +485,76 @@ export default function DisasterMap() {
         setSelectedContext({ type: 'location', lat, lon: lng });
         break;
       }
+      case 'resources.findNearby': {
+        const { lat, lon, disasterType, maxKm } = cmd.args;
+        if (typeof lat !== 'number' || typeof lon !== 'number') break;
+        const results = findNearbyResources(lat, lon, { disasterType, maxKm });
+        const matchIds = results.map((r) => r.id);
+
+        /* Update source to show only matching resources */
+        const filteredResources = aidResources.filter((r) => matchIds.includes(r.id));
+        const src = map.getSource('aid-resources') as mapboxgl.GeoJSONSource | undefined;
+        if (src) src.setData(aidResourcesToGeoJSON(filteredResources));
+
+        /* Make layer visible */
+        if (map.getLayer('aid-resource-circles')) {
+          map.setLayoutProperty('aid-resource-circles', 'visibility', 'visible');
+        }
+
+        /* Fit bounds to show all results */
+        if (filteredResources.length > 0) {
+          const bounds = new mapboxgl.LngLatBounds();
+          for (const r of filteredResources) bounds.extend([r.lon, r.lat]);
+          bounds.extend([lon, lat]); // include search origin
+          map.fitBounds(bounds, { padding: 80, maxZoom: 8, duration: 2000 });
+        }
+        break;
+      }
+      case 'resources.findNearbyFEMA': {
+        const fLat = cmd.args.lat;
+        const fLon = cmd.args.lon;
+        if (typeof fLat !== 'number' || typeof fLon !== 'number') break;
+        fetchFemaNearby(fLat, fLon, cmd.args.maxKm, cmd.args.limit)
+          .then((data) => {
+            const resources = data.resources || [];
+            if (resources.length === 0) return;
+
+            // Build GeoJSON from results and update source
+            const gj: GeoJSON.FeatureCollection = {
+              type: 'FeatureCollection',
+              features: resources.map((r: any) => ({
+                type: 'Feature',
+                geometry: { type: 'Point', coordinates: [r.lon, r.lat] },
+                properties: {
+                  id: `fema-nearby-${r.lat}-${r.lon}`,
+                  name: r.name,
+                  address: r.address,
+                  phone: r.phone,
+                  hours: r.hours,
+                  status: r.status,
+                  drcType: r.drcType,
+                  notes: r.notes,
+                  source: 'FEMA OpenFEMA',
+                },
+              })),
+            };
+            const src = map.getSource('fema-resources') as mapboxgl.GeoJSONSource | undefined;
+            if (src) src.setData(gj);
+
+            // Make FEMA layer visible
+            if (map.getLayer('fema-resource-circles')) {
+              map.setLayoutProperty('fema-resource-circles', 'visibility', 'visible');
+            }
+
+            // Fit bounds to results
+            const bounds = new mapboxgl.LngLatBounds();
+            for (const r of resources) bounds.extend([r.lon, r.lat]);
+            bounds.extend([fLon, fLat]);
+            map.fitBounds(bounds, { padding: 80, maxZoom: 8, duration: 2000 });
+          })
+          .catch((err) => console.warn('FEMA nearby command error:', err));
+        break;
+      }
       case 'map.highlightEvent': {
         const { title } = cmd.args;
         if (!title) break;
@@ -533,6 +690,103 @@ export default function DisasterMap() {
         },
       });
 
+      /* ── Aid resources source + layer ─────────────────────────────── */
+      map.addSource('aid-resources', {
+        type: 'geojson',
+        data: aidResourcesToGeoJSON(),
+      });
+
+      map.addLayer({
+        id: 'aid-resource-circles',
+        type: 'circle',
+        source: 'aid-resources',
+        paint: {
+          'circle-radius': 8,
+          'circle-color': [
+            'match', ['get', 'type'],
+            'shelter', RESOURCE_TYPE_COLORS.shelter,
+            'medical', RESOURCE_TYPE_COLORS.medical,
+            'food', RESOURCE_TYPE_COLORS.food,
+            'evacuation_center', RESOURCE_TYPE_COLORS.evacuation_center,
+            'supply_distribution', RESOURCE_TYPE_COLORS.supply_distribution,
+            'general_help', RESOURCE_TYPE_COLORS.general_help,
+            '#6b7280',
+          ] as unknown as mapboxgl.ExpressionSpecification,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff',
+        },
+        layout: { visibility: 'none' },
+      });
+
+      /* Aid resource click → popup */
+      map.on('click', 'aid-resource-circles', (e) => {
+        const feat = e.features?.[0];
+        if (!feat?.properties) return;
+        if (popupRef.current) popupRef.current.remove();
+        const popup = new mapboxgl.Popup({ offset: 10, maxWidth: '340px', className: 'dark-popup' })
+          .setLngLat(e.lngLat)
+          .setHTML(renderAidPopup(feat.properties))
+          .addTo(map);
+        popupRef.current = popup;
+      });
+
+      /* Aid resource hover cursor */
+      map.on('mouseenter', 'aid-resource-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'aid-resource-circles', () => { map.getCanvas().style.cursor = ''; });
+
+      /* ── FEMA DRC source + layer ────────────────────────────────── */
+      map.addSource('fema-resources', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
+      map.addLayer({
+        id: 'fema-resource-circles',
+        type: 'circle',
+        source: 'fema-resources',
+        paint: {
+          'circle-radius': 7,
+          'circle-color': FEMA_DRC_COLOR,
+          'circle-opacity': 0.9,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#ffffff',
+        },
+        layout: { visibility: 'none' },
+      });
+
+      /* FEMA click → popup */
+      map.on('click', 'fema-resource-circles', (e) => {
+        const feat = e.features?.[0];
+        if (!feat?.properties) return;
+        if (popupRef.current) popupRef.current.remove();
+        const popup = new mapboxgl.Popup({ offset: 10, maxWidth: '340px', className: 'dark-popup' })
+          .setLngLat(e.lngLat)
+          .setHTML(renderFemaPopup(feat.properties))
+          .addTo(map);
+        popupRef.current = popup;
+      });
+
+      map.on('mouseenter', 'fema-resource-circles', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'fema-resource-circles', () => { map.getCanvas().style.cursor = ''; });
+
+      /* Debounced FEMA data fetch on viewport change */
+      const loadFemaForViewport = () => {
+        if (map.getLayoutProperty('fema-resource-circles', 'visibility') !== 'visible') return;
+        if (femaDebounceRef.current) clearTimeout(femaDebounceRef.current);
+        femaDebounceRef.current = setTimeout(() => {
+          const bounds = map.getBounds();
+          const bbox = `${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()},${bounds.getSouth()}`;
+          fetchFemaGeoJSON(bbox)
+            .then((gj) => {
+              const src = map.getSource('fema-resources') as mapboxgl.GeoJSONSource | undefined;
+              if (src) src.setData(gj);
+            })
+            .catch((err) => console.warn('FEMA fetch error:', err));
+        }, 800);
+      };
+      map.on('moveend', loadFemaForViewport);
+      map.on('idle', loadFemaForViewport);
+
       /* ── Click → popup ───────────────────────────────────────────── */
       const handleClick = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapboxGeoJSONFeature[] }) => {
         const feat = e.features?.[0];
@@ -593,7 +847,10 @@ export default function DisasterMap() {
 
       /* General map click → set location context */
       map.on('click', (e) => {
-        const features = map.queryRenderedFeatures(e.point, { layers: ['eonet-circles', 'eonet-fills'] });
+        const layers = ['eonet-circles', 'eonet-fills'];
+        if (map.getLayer('aid-resource-circles')) layers.push('aid-resource-circles');
+        if (map.getLayer('fema-resource-circles')) layers.push('fema-resource-circles');
+        const features = map.queryRenderedFeatures(e.point, { layers });
         if (features.length > 0) return;
         setSelectedContext({ type: 'location', lat: e.lngLat.lat, lon: e.lngLat.lng });
       });
@@ -701,6 +958,54 @@ export default function DisasterMap() {
               Seasonal Predictions
             </button>
           </div>
+          <button
+            onClick={() => {
+              const next = !showAidResources;
+              setShowAidResources(next);
+              const map = mapRef.current;
+              if (map?.getLayer('aid-resource-circles')) {
+                map.setLayoutProperty('aid-resource-circles', 'visibility', next ? 'visible' : 'none');
+                if (next) {
+                  // Reset source to show all resources when toggling on
+                  const src = map.getSource('aid-resources') as mapboxgl.GeoJSONSource | undefined;
+                  if (src) src.setData(aidResourcesToGeoJSON());
+                }
+              }
+            }}
+            className={cn(
+              'px-3 py-1.5 text-xs font-medium transition-colors rounded border border-border bg-card/90 backdrop-blur-md',
+              showAidResources ? 'bg-emerald-600 text-white border-emerald-500' : 'text-muted-foreground hover:bg-muted',
+            )}
+          >
+            Aid Resources
+          </button>
+          <button
+            onClick={() => {
+              const next = !showFemaResources;
+              setShowFemaResources(next);
+              const map = mapRef.current;
+              if (map?.getLayer('fema-resource-circles')) {
+                map.setLayoutProperty('fema-resource-circles', 'visibility', next ? 'visible' : 'none');
+                if (next) {
+                  // Trigger initial load for current viewport
+                  const bounds = map.getBounds();
+                  const bbox = `${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()},${bounds.getSouth()}`;
+                  fetchFemaGeoJSON(bbox)
+                    .then((gj) => {
+                      const src = map.getSource('fema-resources') as mapboxgl.GeoJSONSource | undefined;
+                      if (src) src.setData(gj);
+                    })
+                    .catch((err) => console.warn('FEMA fetch error:', err));
+                }
+              }
+            }}
+            className={cn(
+              'px-3 py-1.5 text-xs font-medium transition-colors rounded border border-border bg-card/90 backdrop-blur-md',
+              showFemaResources ? 'bg-orange-600 text-white border-orange-500' : 'text-muted-foreground hover:bg-muted',
+            )}
+          >
+            FEMA Centers
+          </button>
           {mapMode === 'predictions' && (
             <div className="flex rounded border border-border bg-card/90 backdrop-blur-md p-1 gap-0.5">
               {(['Spring', 'Summer', 'Fall', 'Winter'] as const).map((s) => (

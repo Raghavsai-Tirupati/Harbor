@@ -548,10 +548,201 @@ app.get('/search-location', async (req, res) => {
   }
 });
 
+// ── FEMA Disaster Recovery Centers (ArcGIS FeatureServer proxy) ──
+const femaCache = new Map();
+const FEMA_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const FEMA_DRC_BASE = 'https://gis.fema.gov/arcgis/rest/services/FEMA/DRC/FeatureServer';
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function normalizeDrcFeature(attr) {
+  const lat = parseFloat(attr.latitude);
+  const lon = parseFloat(attr.longitude);
+  if (isNaN(lat) || isNaN(lon) || lat === 0 || lon === 0) return null;
+  const addr = [attr.street_1, attr.street_2].filter(Boolean).join(', ');
+  const city = [attr.city, attr.state, attr.zip].filter(Boolean).join(', ');
+  return {
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [lon, lat] },
+    properties: {
+      id: `fema-drc-${attr.objectid || attr.drc_id || Math.random().toString(36).slice(2)}`,
+      name: attr.drc_name || 'FEMA Disaster Recovery Center',
+      address: addr ? `${addr}, ${city}` : city || null,
+      phone: null,
+      hours: attr.hours || null,
+      status: (attr.status || 'Unknown').toLowerCase(),
+      daysOpen: attr.days_open || null,
+      disasterNumber: attr.primary_disaster || null,
+      drcType: attr.drc_type_desc || null,
+      notes: attr.notes || null,
+      totalVisitors: attr.total || null,
+      source: 'FEMA OpenFEMA',
+      dataset: 'Disaster Recovery Centers',
+      lat,
+      lon,
+    },
+  };
+}
+
+async function fetchFemaDrc(layer, where, limit) {
+  const cacheKey = `fema|${layer}|${where}|${limit}`;
+  const cached = femaCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < FEMA_CACHE_TTL) return cached.data;
+
+  const url = `${FEMA_DRC_BASE}/${layer}/query?` + new URLSearchParams({
+    where,
+    outFields: '*',
+    f: 'json',
+    resultRecordCount: String(limit),
+    orderByFields: 'objectid DESC',
+    returnGeometry: 'false',
+  });
+
+  const r = await fetch(url);
+  const json = await r.json();
+  const features = (json.features || [])
+    .map((f) => normalizeDrcFeature(f.attributes))
+    .filter(Boolean);
+
+  // Deduplicate by id
+  const seen = new Set();
+  const deduped = [];
+  for (const f of features) {
+    if (seen.has(f.properties.id)) continue;
+    seen.add(f.properties.id);
+    deduped.push(f);
+  }
+
+  const geojson = { type: 'FeatureCollection', features: deduped };
+  femaCache.set(cacheKey, { ts: Date.now(), data: geojson });
+  return geojson;
+}
+
+// GET /api/fema/resources?bbox=<minLon,maxLat,maxLon,minLat>&limit=<n>
+app.get('/api/fema/resources', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || '200', 10), 500);
+  const bbox = req.query.bbox;
+
+  try {
+    // Fetch from both open (layer 0) and archived (layer 1) layers
+    const [openDrcs, archivedDrcs] = await Promise.all([
+      fetchFemaDrc(0, '1=1', limit),
+      fetchFemaDrc(1, '1=1', limit),
+    ]);
+
+    // Merge both sets
+    const allFeatures = [...openDrcs.features, ...archivedDrcs.features];
+
+    // If bbox provided, filter server-side
+    let filtered = allFeatures;
+    if (bbox) {
+      const [minLon, maxLat, maxLon, minLat] = bbox.split(',').map(Number);
+      if (!isNaN(minLon) && !isNaN(maxLat) && !isNaN(maxLon) && !isNaN(minLat)) {
+        filtered = allFeatures.filter((f) => {
+          const p = f.properties;
+          return p.lat >= minLat && p.lat <= maxLat && p.lon >= minLon && p.lon <= maxLon;
+        });
+      }
+    }
+
+    res.json({
+      type: 'FeatureCollection',
+      features: filtered.slice(0, limit),
+      metadata: {
+        totalOpen: openDrcs.features.length,
+        totalArchived: archivedDrcs.features.length,
+        returned: Math.min(filtered.length, limit),
+        fetchedAt: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    console.error('FEMA resources error:', err);
+    res.status(502).json({ error: 'Failed to fetch FEMA resources', type: 'FeatureCollection', features: [] });
+  }
+});
+
+// GET /api/fema/nearby?lat=<>&lon=<>&maxKm=<>&limit=<>
+app.get('/api/fema/nearby', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lon = parseFloat(req.query.lon);
+  const maxKm = parseFloat(req.query.maxKm || '500');
+  const limit = Math.min(parseInt(req.query.limit || '10', 10), 50);
+
+  if (isNaN(lat) || isNaN(lon)) {
+    return res.status(400).json({ error: 'lat and lon are required' });
+  }
+
+  try {
+    // Fetch all DRCs (both open and archived) — cached for 10 min
+    const [openDrcs, archivedDrcs] = await Promise.all([
+      fetchFemaDrc(0, '1=1', 500),
+      fetchFemaDrc(1, '1=1', 500),
+    ]);
+
+    const allFeatures = [...openDrcs.features, ...archivedDrcs.features];
+
+    // Calculate distances and filter
+    const withDist = allFeatures
+      .map((f) => {
+        const p = f.properties;
+        const distanceKm = haversineKm(lat, lon, p.lat, p.lon);
+        return { ...p, distanceKm: Math.round(distanceKm * 10) / 10 };
+      })
+      .filter((r) => r.distanceKm <= maxKm)
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, limit);
+
+    // If no results, return fallback
+    if (withDist.length === 0) {
+      return res.json({
+        resources: [],
+        fallback: {
+          message: 'No FEMA Disaster Recovery Centers found within the specified radius.',
+          suggestions: [
+            { name: 'FEMA Disaster Assistance', phone: '1-800-621-3362', url: 'https://www.disasterassistance.gov' },
+            { name: 'American Red Cross', phone: '1-800-733-2767', url: 'https://www.redcross.org' },
+            { name: '211 Helpline', phone: '211', url: 'https://www.211.org' },
+          ],
+        },
+      });
+    }
+
+    res.json({
+      resources: withDist.map((r) => ({
+        name: r.name,
+        type: 'FEMA_DRC',
+        lat: r.lat,
+        lon: r.lon,
+        distanceKm: r.distanceKm,
+        address: r.address,
+        phone: r.phone,
+        hours: r.hours,
+        status: r.status,
+        drcType: r.drcType,
+        notes: r.notes,
+        url: 'https://www.disasterassistance.gov',
+        source: r.source,
+      })),
+      fallback: null,
+    });
+  } catch (err) {
+    console.error('FEMA nearby error:', err);
+    res.status(502).json({ error: 'Failed to fetch nearby FEMA resources', resources: [] });
+  }
+});
+
 app.get('/health', (_, res) => res.json({ ok: true }));
 
 const HOST = process.env.HOST || '0.0.0.0';
 app.listen(PORT, HOST, () => {
   console.log(`Disaster API listening on http://${HOST}:${PORT}`);
-  console.log('Endpoints: /eonet, /earthquakes, /eonet-events, /event-news, /alerts, /headlines, /search-location, /health');
+  console.log('Endpoints: /eonet, /earthquakes, /eonet-events, /event-news, /alerts, /headlines, /search-location, /api/fema/resources, /api/fema/nearby, /health');
 });
