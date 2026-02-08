@@ -7,12 +7,17 @@ import { findNearbyResources, RESOURCE_TYPE_LABELS, type NearbyResult } from '@/
 /* ── Shared types ─────────────────────────────────────────────────── */
 
 export interface MapContext {
-  type: 'location' | 'event';
+  type: 'location' | 'event' | 'user_location';
   lat: number;
   lon: number;
   title?: string;
   category?: string;
   sources?: { url?: string }[];
+}
+
+export interface UserLocation {
+  lat: number;
+  lon: number;
 }
 
 export interface ToolCommand {
@@ -56,6 +61,7 @@ async function callAI(systemPrompt: string, messages: Message[]): Promise<string
 function buildSystemPrompt(
   ctx: MapContext | null,
   activeEvents: EventSummary[],
+  userLocation: UserLocation | null,
 ): string {
   const parts = [
     'You are Harbor AI, a disaster preparedness and safety assistant.',
@@ -103,6 +109,14 @@ function buildSystemPrompt(
     '',
   ];
 
+  /* Always include user's real location so the AI can reason about proximity */
+  if (userLocation) {
+    parts.push(`USER\'S REAL-TIME LOCATION: ${userLocation.lat.toFixed(4)}, ${userLocation.lon.toFixed(4)}`);
+    parts.push('Use this as the default location for any location-based queries unless the user');
+    parts.push('has selected a different location on the map or mentioned a specific place.');
+    parts.push('');
+  }
+
   if (activeEvents.length > 0) {
     parts.push('ACTIVE EONET EVENTS (use exact titles for map.highlightEvent):');
     for (const e of activeEvents) {
@@ -112,7 +126,7 @@ function buildSystemPrompt(
   }
 
   if (ctx?.type === 'event') {
-    parts.push('CURRENTLY SELECTED EVENT:');
+    parts.push('CURRENTLY SELECTED CONTEXT — an event the user clicked on the map:');
     if (ctx.title) parts.push(`- Title: ${ctx.title}`);
     if (ctx.category) parts.push(`- Category: ${ctx.category}`);
     parts.push(`- Coordinates: ${ctx.lat.toFixed(4)}, ${ctx.lon.toFixed(4)}`);
@@ -121,9 +135,14 @@ function buildSystemPrompt(
       if (urls.length) parts.push(`- Official sources: ${urls.join(', ')}`);
     }
     parts.push('', 'Use this event context to provide relevant, specific advice.');
-  } else if (ctx?.type === 'location') {
-    parts.push(`SELECTED LOCATION: ${ctx.lat.toFixed(4)}, ${ctx.lon.toFixed(4)}`);
-    parts.push('', 'Consider what disasters might affect this geographic area.');
+  } else if (ctx?.type === 'location' && ctx.type !== 'user_location') {
+    parts.push(`CURRENTLY SELECTED CONTEXT — a location the user pinned on the map:`);
+    parts.push(`- Coordinates: ${ctx.lat.toFixed(4)}, ${ctx.lon.toFixed(4)}`);
+    parts.push('', 'The user pinned this different location. Use THESE coordinates (not their real-time location) for this conversation.');
+  } else if (ctx?.type === 'user_location') {
+    parts.push('CONTEXT: The user is asking about their current location.');
+    parts.push(`- Coordinates: ${ctx.lat.toFixed(4)}, ${ctx.lon.toFixed(4)}`);
+    parts.push('', 'Provide information relevant to where they physically are.');
   }
 
   return parts.join('\n');
@@ -149,7 +168,7 @@ function parseResponse(raw: string): { text: string; commands: ToolCommand[] } {
 
 /* ── Quick action buttons ─────────────────────────────────────────── */
 
-function getQuickActions(ctx: MapContext | null): { label: string; prompt: string }[] {
+function getQuickActions(ctx: MapContext | null, userLocation: UserLocation | null): { label: string; prompt: string }[] {
   if (ctx?.type === 'event') {
     const cat = ctx.category || 'this disaster';
     return [
@@ -163,6 +182,14 @@ function getQuickActions(ctx: MapContext | null): { label: string; prompt: strin
       { label: 'Risks here?', prompt: 'What kinds of natural disasters or hazards could affect this location?' },
       { label: 'Find shelters', prompt: 'How can I find emergency shelters near this location?' },
       { label: 'Prepare', prompt: 'How should I prepare for emergencies in this area?' },
+    ];
+  }
+  /* Default: if we have user location, make prompts location-aware */
+  if (userLocation) {
+    return [
+      { label: 'Risks near me', prompt: 'What natural disaster risks or active hazards are near my current location?' },
+      { label: 'Shelters near me', prompt: 'Find emergency shelters and aid resources near my current location.' },
+      { label: 'Active disasters', prompt: 'What major natural disasters are happening right now? Show me the closest one to my location.' },
     ];
   }
   return [
@@ -271,9 +298,10 @@ interface ChatPanelProps {
   onClearContext: () => void;
   onCommand: (cmd: ToolCommand) => void;
   activeEvents: EventSummary[];
+  userLocation: UserLocation | null;
 }
 
-export default function ChatPanel({ selectedContext, onClearContext, onCommand, activeEvents }: ChatPanelProps) {
+export default function ChatPanel({ selectedContext, onClearContext, onCommand, activeEvents, userLocation }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -314,7 +342,7 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
     setIsLoading(true);
 
     try {
-      const rawAnswer = await callAI(buildSystemPrompt(selectedContext, activeEvents), updated);
+      const rawAnswer = await callAI(buildSystemPrompt(selectedContext, activeEvents, userLocation), updated);
       const { text: displayText, commands } = parseResponse(rawAnswer);
 
       /* If resource commands exist, run search client-side and append results */
@@ -356,7 +384,7 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
     }
   };
 
-  const quickActions = getQuickActions(selectedContext);
+  const quickActions = getQuickActions(selectedContext, userLocation);
 
   return (
     <div className={cn(
@@ -396,13 +424,17 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
           <div className="flex items-center gap-2 px-2.5 py-1.5 bg-muted text-xs">
             {selectedContext.type === 'event' ? (
               <AlertTriangle className="h-3 w-3 text-disaster-amber shrink-0" />
+            ) : selectedContext.type === 'user_location' ? (
+              <MapPin className="h-3 w-3 text-disaster-green shrink-0" />
             ) : (
               <MapPin className="h-3 w-3 text-disaster-blue shrink-0" />
             )}
             <span className="truncate flex-1 text-foreground">
               {selectedContext.type === 'event'
                 ? selectedContext.title || 'Disaster event'
-                : `${selectedContext.lat.toFixed(2)}, ${selectedContext.lon.toFixed(2)}`}
+                : selectedContext.type === 'user_location'
+                  ? 'Your location'
+                  : `${selectedContext.lat.toFixed(2)}, ${selectedContext.lon.toFixed(2)}`}
             </span>
             <button onClick={onClearContext} className="shrink-0 hover:text-foreground text-muted-foreground">
               <X className="h-3 w-3" />

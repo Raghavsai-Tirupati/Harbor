@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { ChevronDown, Filter } from 'lucide-react';
 import { fetchEonet, fetchEarthquakes, fetchEventNews } from '@/lib/disasterApi';
-import ChatPanel, { type MapContext, type ToolCommand, type EventSummary } from '@/components/disaster/ChatPanel';
+import ChatPanel, { type MapContext, type ToolCommand, type EventSummary, type UserLocation } from '@/components/disaster/ChatPanel';
 import { aidResources, RESOURCE_TYPE_COLORS, RESOURCE_TYPE_LABELS, findNearbyResources, type AidResourceEntry } from '@/data/aidResources';
 
 /* ── Season / prediction constants ────────────────────────────────────── */
@@ -329,6 +329,7 @@ export default function DisasterMap() {
   const [showAidResources, setShowAidResources] = useState(false);
   const [showFemaResources, setShowFemaResources] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -337,6 +338,7 @@ export default function DisasterMap() {
   const fetchInProgressRef = useRef(false);
   const focusEventRef = useRef<FocusEvent | null>(null);
   const eonetFeaturesRef = useRef<GeoJSON.Feature[]>([]);
+  const userMarkerRef = useRef<mapboxgl.Marker | null>(null);
 
   const femaDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -368,6 +370,21 @@ export default function DisasterMap() {
     } catch {
       focusEventRef.current = null;
     }
+  }, []);
+
+  /* ── Request user geolocation ──────────────────────────────────── */
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const loc: UserLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        setUserLocation(loc);
+        /* Set as default context if nothing else is selected */
+        setSelectedContext((prev) => prev ?? { type: 'user_location', lat: loc.lat, lon: loc.lon });
+      },
+      (err) => console.warn('Geolocation denied or unavailable:', err.message),
+      { enableHighAccuracy: false, timeout: 10000 },
+    );
   }, []);
 
   /* ── Fetch EONET / predictions and push into Mapbox source ───────── */
@@ -908,6 +925,7 @@ export default function DisasterMap() {
     return () => {
       cancelled = true;
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      if (userMarkerRef.current) { userMarkerRef.current.remove(); userMarkerRef.current = null; }
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -915,6 +933,49 @@ export default function DisasterMap() {
       }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── User location marker (pulsing blue dot) ────────────────────── */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!userLocation || !map || !mapReadyRef.current) return;
+
+    /* Build a pulsing dot element */
+    if (!userMarkerRef.current) {
+      const el = document.createElement('div');
+      el.className = 'user-location-marker';
+      el.style.cssText = `
+        width: 18px; height: 18px; border-radius: 50%;
+        background: radial-gradient(circle, #3b82f6 40%, transparent 70%);
+        border: 2.5px solid #ffffff;
+        box-shadow: 0 0 0 0 rgba(59,130,246,0.5);
+        animation: user-loc-pulse 2s ease-out infinite;
+        cursor: pointer;
+      `;
+      /* Add keyframe animation once */
+      if (!document.getElementById('user-loc-pulse-style')) {
+        const style = document.createElement('style');
+        style.id = 'user-loc-pulse-style';
+        style.textContent = `@keyframes user-loc-pulse { 0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); } 70% { box-shadow: 0 0 0 14px rgba(59,130,246,0); } 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); } }`;
+        document.head.appendChild(style);
+      }
+
+      el.addEventListener('click', () => {
+        setSelectedContext({ type: 'user_location', lat: userLocation.lat, lon: userLocation.lon });
+      });
+
+      const marker = new mapboxgl.Marker({ element: el })
+        .setLngLat([userLocation.lon, userLocation.lat])
+        .addTo(map);
+      userMarkerRef.current = marker;
+
+      /* Fly to user location if no focus event was set */
+      if (!focusEventRef.current) {
+        map.flyTo({ center: [userLocation.lon, userLocation.lat], zoom: 5, duration: 2500 });
+      }
+    } else {
+      userMarkerRef.current.setLngLat([userLocation.lon, userLocation.lat]);
+    }
+  }, [userLocation]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Re-fetch when mode / season changes ─────────────────────────── */
   useEffect(() => {
@@ -1085,9 +1146,17 @@ export default function DisasterMap() {
       </div>
       <ChatPanel
         selectedContext={selectedContext}
-        onClearContext={() => setSelectedContext(null)}
+        onClearContext={() => {
+          /* Fall back to user location context instead of null */
+          if (userLocation) {
+            setSelectedContext({ type: 'user_location', lat: userLocation.lat, lon: userLocation.lon });
+          } else {
+            setSelectedContext(null);
+          }
+        }}
         onCommand={handleCommand}
         activeEvents={activeEvents}
+        userLocation={userLocation}
       />
     </div>
   );
