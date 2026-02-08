@@ -52,6 +52,8 @@ export default function Home() {
       {/* Video Background */}
       <div className="absolute inset-0">
         <HeroVideoCarousel onVideoChange={handleVideoChange} />
+        {/* Bottom gradient fade to black */}
+        <div className="absolute bottom-0 left-0 right-0 h-48 bg-gradient-to-t from-black to-transparent z-[5]" />
       </div>
 
       <div className="relative z-10 h-full flex flex-col" style={{ zIndex: 20 }}>
