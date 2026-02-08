@@ -109,9 +109,27 @@ async function fetchEventNews(
   const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${query}&mode=artlist&maxrecords=15&timespan=${span}&format=json`;
 
   const res = await fetch(url);
-  if (!res.ok) throw new Error('GDELT request failed');
   
-  const data = await res.json();
+  // GDELT sometimes returns text error messages instead of JSON
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    console.warn('GDELT returned non-JSON response:', await res.text().catch(() => 'unknown'));
+    return [];
+  }
+  
+  if (!res.ok) {
+    console.error('GDELT request failed with status:', res.status);
+    return [];
+  }
+  
+  let data;
+  try {
+    data = await res.json();
+  } catch (parseError) {
+    console.warn('Failed to parse GDELT response as JSON');
+    return [];
+  }
+  
   const articles = Array.isArray(data) ? data : data.articles || data.results || [];
 
   const candidates: Article[] = articles.slice(0, 20).map((a: any) => ({
