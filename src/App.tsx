@@ -4,6 +4,8 @@ import { Footer } from './components/disaster/Footer';
 import Home from './pages/Home';
 import DisasterMap from './pages/DisasterMap';
 import Trends from './pages/Trends';
+import AidResources from './pages/AidResources';
+import About from './pages/About';
 import NotFound from './pages/NotFound';
 
 export default function App() {
@@ -15,6 +17,8 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/map" element={<DisasterMap />} />
           <Route path="/trends" element={<Trends />} />
+          <Route path="/resources" element={<AidResources />} />
+          <Route path="/about" element={<About />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>

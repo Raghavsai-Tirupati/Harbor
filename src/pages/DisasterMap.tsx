@@ -40,13 +40,13 @@ export default function DisasterMap() {
       <div className="flex-1 relative">
         {/* Controls */}
         <div className="absolute top-4 left-4 right-4 z-[1000] flex flex-wrap gap-2">
-          <div className="bg-card/90 backdrop-blur-md rounded-xl border border-border p-2 flex flex-wrap gap-1">
+          <div className="bg-card/90 backdrop-blur-md border border-border p-2 flex flex-wrap gap-1">
             {types.map((t) => (
               <button
                 key={t.value}
                 onClick={() => setTypeFilter(t.value)}
                 className={cn(
-                  'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                  'px-3 py-1.5 text-xs font-medium transition-colors',
                   typeFilter === t.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
                 )}
               >
@@ -54,13 +54,13 @@ export default function DisasterMap() {
               </button>
             ))}
           </div>
-          <div className="bg-card/90 backdrop-blur-md rounded-xl border border-border p-2 flex flex-wrap gap-1">
+          <div className="bg-card/90 backdrop-blur-md border border-border p-2 flex flex-wrap gap-1">
             {times.map((t) => (
               <button
                 key={t}
                 onClick={() => setTimeFilter(t)}
                 className={cn(
-                  'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                  'px-3 py-1.5 text-xs font-medium transition-colors',
                   timeFilter === t ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
                 )}
               >
@@ -126,7 +126,7 @@ export default function DisasterMap() {
             </div>
 
             <div className="pt-4 border-t border-border space-y-3">
-              <Button asChild className="w-full rounded-full">
+              <Button asChild className="w-full">
                 <Link to="/aid">
                   <MapPin className="h-4 w-4 mr-2" /> Find Nearby Aid
                 </Link>

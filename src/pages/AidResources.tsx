@@ -33,13 +33,13 @@ export default function AidResources() {
     <div className="flex flex-col lg:flex-row h-[calc(100vh-4rem)]">
       {/* Map */}
       <div className="flex-1 relative min-h-[300px]">
-        <div className="absolute top-4 left-4 z-[1000] bg-card/90 backdrop-blur-md rounded-xl border border-border p-2 flex flex-wrap gap-1">
+        <div className="absolute top-4 left-4 z-[1000] bg-card/90 backdrop-blur-md border border-border p-2 flex flex-wrap gap-1">
           {filterTypes.map((t) => (
             <button
               key={t}
               onClick={() => setFilter(t)}
               className={cn(
-                'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors capitalize',
+                'px-3 py-1.5 text-xs font-medium transition-colors capitalize',
                 filter === t ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
               )}
             >
@@ -82,7 +82,7 @@ export default function AidResources() {
             return (
               <div key={r.id} className="p-4 hover:bg-muted/30 transition-colors">
                 <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0" style={{ backgroundColor: `${aidColors[r.type]}20` }}>
+                  <div className="w-9 h-9 flex items-center justify-center shrink-0" style={{ backgroundColor: `${aidColors[r.type]}20` }}>
                     <Icon className="h-4 w-4" style={{ color: aidColors[r.type] }} />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -90,7 +90,7 @@ export default function AidResources() {
                     <p className="text-xs text-muted-foreground mt-0.5">{typeLabels[r.type]} · {r.distance}</p>
                     <p className="text-xs text-muted-foreground">{r.address}</p>
                   </div>
-                  <Button size="sm" variant="outline" className="shrink-0 text-xs rounded-full">
+                  <Button size="sm" variant="outline" className="shrink-0 text-xs">
                     <Navigation className="h-3 w-3 mr-1" /> Directions
                   </Button>
                 </div>
