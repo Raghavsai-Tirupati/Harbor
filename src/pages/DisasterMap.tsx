@@ -7,6 +7,7 @@ import { ChevronDown, Filter } from 'lucide-react';
 import { fetchEonet, fetchEarthquakes, fetchEventNews } from '@/lib/disasterApi';
 import ChatPanel, { type MapContext, type ToolCommand, type EventSummary, type UserLocation } from '@/components/disaster/ChatPanel';
 import { aidResources, RESOURCE_TYPE_COLORS, RESOURCE_TYPE_LABELS, findNearbyResources, type AidResourceEntry } from '@/data/aidResources';
+import * as globeTransition from '@/lib/globeTransition';
 
 /* ── Season / prediction constants ────────────────────────────────────── */
 
@@ -228,6 +229,41 @@ function renderPopup(title: string, extra: string, sourceLinks: string, newsHtml
   );
 }
 
+/* ── Measure the actual Mapbox globe sphere on screen ─────────────────── */
+
+/**
+ * Uses map.project() to measure the rendered globe sphere's exact screen
+ * position and diameter.  Works at any viewport / resolution / zoom.
+ *
+ * Method: project two points at ±DELTA° latitude from the camera center
+ * (same longitude).  Their vertical span on screen equals
+ *   2 × R_screen × sin(DELTA°)
+ * which we invert to get R_screen.
+ */
+function measureGlobeRect(
+  map: mapboxgl.Map,
+  containerEl: HTMLElement,
+): DOMRect {
+  const containerRect = containerEl.getBoundingClientRect();
+  const center = map.getCenter();
+  const centerPx = map.project(center);
+
+  const DELTA = 25; // degrees — safely inside [-90, 90] for any center
+  const top = map.project([center.lng, center.lat + DELTA]);
+  const bottom = map.project([center.lng, center.lat - DELTA]);
+  const halfSpan = Math.abs(bottom.y - top.y) / 2;
+  const globeRadius = halfSpan / Math.sin(DELTA * Math.PI / 180);
+  const diameter = globeRadius * 2;
+
+  // Return a square DOMRect in viewport coordinates, centered on the globe
+  return new DOMRect(
+    containerRect.left + centerPx.x - globeRadius,
+    containerRect.top + centerPx.y - globeRadius,
+    diameter,
+    diameter,
+  );
+}
+
 /* ── Auto-rotate settings ─────────────────────────────────────────────── */
 
 const SECONDS_PER_REVOLUTION = 240;
@@ -331,6 +367,9 @@ export default function DisasterMap() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [userLocation, setUserLocation] = useState<UserLocation | null>(null);
 
+  /* Globe transition: start invisible if transition is in-flight */
+  const [mapVisible, setMapVisible] = useState(!(window as any).__globeTransition);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const popupRef = useRef<mapboxgl.Popup | null>(null);
@@ -386,6 +425,24 @@ export default function DisasterMap() {
       { enableHighAccuracy: false, timeout: 10000 },
     );
   }, []);
+
+  /* ── Globe transition: safety timeout + unmount cleanup ────────── */
+  useEffect(() => {
+    if (!globeTransition.isActive()) return;
+    // The actual morph is triggered from inside map.on('load') once we
+    // can measure the real Mapbox globe.  This timeout is a safety net:
+    // if the map hasn't loaded within 6 s, abort and show the page.
+    const safetyTimer = setTimeout(() => {
+      if (globeTransition.isActive()) {
+        globeTransition.cleanup();
+        setMapVisible(true);
+      }
+    }, 6000);
+    return () => {
+      clearTimeout(safetyTimer);
+      if (globeTransition.isActive()) globeTransition.cleanup();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── Fetch EONET / predictions and push into Mapbox source ───────── */
   const fetchData = useCallback(() => {
@@ -635,12 +692,18 @@ export default function DisasterMap() {
         token = data?.token;
       } catch (e) {
         console.error('Mapbox token fetch error:', e);
-        if (!cancelled) setMapError('Failed to load Mapbox token from backend.');
+        if (!cancelled) {
+          setMapError('Failed to load Mapbox token from backend.');
+          if (globeTransition.isActive()) { globeTransition.cleanup(); setMapVisible(true); }
+        }
         return;
       }
 
       if (!token) {
-        if (!cancelled) setMapError('Mapbox token not configured in backend.');
+        if (!cancelled) {
+          setMapError('Mapbox token not configured in backend.');
+          if (globeTransition.isActive()) { globeTransition.cleanup(); setMapVisible(true); }
+        }
         return;
       }
       if (cancelled || !containerRef.current) return;
@@ -876,6 +939,17 @@ export default function DisasterMap() {
       /* mark ready & load initial data */
       mapRef.current = map;
       mapReadyRef.current = true;
+
+      /* ── Globe transition: measure real globe and start morph ─────── */
+      if (globeTransition.isActive() && containerRef.current) {
+        const globeRect = measureGlobeRect(map, containerRef.current);
+        globeTransition.morphToTarget(
+          globeRect,
+          () => setMapVisible(true),
+          () => {},
+        );
+      }
+
       fetchData();
 
       /* start auto-rotate */
@@ -996,7 +1070,13 @@ export default function DisasterMap() {
 
   /* ── Render ──────────────────────────────────────────────────────── */
   return (
-    <div className="h-[calc(100vh-4rem)] flex flex-row w-full">
+    <div
+      className="h-[calc(100vh-4rem)] flex flex-row w-full"
+      style={{
+        opacity: mapVisible ? 1 : 0,
+        transition: mapVisible ? 'opacity 0.5s ease-out' : 'none',
+      }}
+    >
       <div className="flex-1 h-full relative min-w-0">
         {/* Click-away backdrop for filters */}
         {filtersOpen && (
