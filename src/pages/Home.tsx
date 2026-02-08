@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { MapPin } from 'lucide-react';
+import { MapPin, ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HeroVideoCarousel } from '@/components/HeroVideoCarousel';
 import { useState, useRef, useCallback } from 'react';
@@ -76,17 +76,11 @@ export default function Home() {
               animate="visible"
               variants={fade}
               transition={{ duration: 0.6, delay: 0.3 }}
-              className="mt-12 flex flex-col sm:flex-row items-center justify-center gap-6"
+              className="mt-12 flex items-center justify-center"
             >
               <Link
                 to="/map"
-                className="w-72 py-5 text-center text-sm font-semibold tracking-[0.2em] uppercase bg-white text-black hover:bg-white/90 transition-colors"
-              >
-                GET STARTED
-              </Link>
-              <Link
-                to="/map"
-                className="w-72 py-5 text-center text-sm font-semibold tracking-[0.2em] uppercase border border-white/40 text-white hover:bg-white/10 transition-colors flex items-center justify-center gap-2"
+                className="w-72 py-5 text-center text-sm font-semibold tracking-[0.2em] uppercase bg-white text-black hover:bg-white/90 transition-colors flex items-center justify-center gap-2"
               >
                 <MapPin className="h-4 w-4" />
                 DISASTER MAP
@@ -142,17 +136,33 @@ export default function Home() {
             </AnimatePresence>
           </div>
 
-          {/* Dots */}
-          <div className="flex justify-center gap-2 mt-6">
-            {HEADLINES.map((_, i) => (
-              <button
-                key={i}
-                onClick={() => setActiveIndex(i)}
-                className={`w-2 h-2 transition-colors ${
-                  i === activeIndex ? 'bg-white' : 'bg-white/25'
-                }`}
-              />
-            ))}
+          {/* Arrows + Dots */}
+          <div className="flex items-center justify-center gap-4 mt-6">
+            <button
+              onClick={() => setActiveIndex((prev) => (prev - 1 + HEADLINES.length) % HEADLINES.length)}
+              className="p-2 text-white/50 hover:text-white transition-colors"
+              aria-label="Previous headline"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+            <div className="flex gap-2">
+              {HEADLINES.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActiveIndex(i)}
+                  className={`w-2 h-2 transition-colors ${
+                    i === activeIndex ? 'bg-white' : 'bg-white/25'
+                  }`}
+                />
+              ))}
+            </div>
+            <button
+              onClick={() => setActiveIndex((prev) => (prev + 1) % HEADLINES.length)}
+              className="p-2 text-white/50 hover:text-white transition-colors"
+              aria-label="Next headline"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </button>
           </div>
         </div>
       </div>
