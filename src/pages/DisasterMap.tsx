@@ -3,7 +3,7 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
-import harborLogo from '@/assets/harbor-logo.png';
+import { ChevronDown, Filter } from 'lucide-react';
 import { fetchEonet, fetchEarthquakes, fetchEventNews } from '@/lib/disasterApi';
 import ChatPanel, { type MapContext, type ToolCommand, type EventSummary } from '@/components/disaster/ChatPanel';
 import { aidResources, RESOURCE_TYPE_COLORS, RESOURCE_TYPE_LABELS, findNearbyResources, type AidResourceEntry } from '@/data/aidResources';
@@ -328,6 +328,7 @@ export default function DisasterMap() {
   const [activeEvents, setActiveEvents] = useState<EventSummary[]>([]);
   const [showAidResources, setShowAidResources] = useState(false);
   const [showFemaResources, setShowFemaResources] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -936,103 +937,148 @@ export default function DisasterMap() {
   return (
     <div className="h-[calc(100vh-4rem)] flex flex-row w-full">
       <div className="w-3/4 h-full relative flex-shrink-0">
-        {/* Mode & season toggles */}
-        <div className="absolute top-4 left-4 z-[1000] flex flex-wrap gap-2">
-          <div className="flex rounded border border-border bg-card/90 backdrop-blur-md p-1">
-            <button
-              onClick={() => setMapMode('current')}
-              className={cn(
-                'px-3 py-1.5 text-xs font-medium transition-colors rounded',
-                mapMode === 'current' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
-              )}
-            >
-              Current Events
-            </button>
-            <button
-              onClick={() => setMapMode('predictions')}
-              className={cn(
-                'px-3 py-1.5 text-xs font-medium transition-colors rounded',
-                mapMode === 'predictions' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
-              )}
-            >
-              Seasonal Predictions
-            </button>
-          </div>
+        {/* Click-away backdrop for filters */}
+        {filtersOpen && (
+          <div className="fixed inset-0 z-[999]" onClick={() => setFiltersOpen(false)} />
+        )}
+
+        {/* Filters dropdown */}
+        <div className="absolute top-4 left-4 z-[1000] select-none">
           <button
-            onClick={() => {
-              const next = !showAidResources;
-              setShowAidResources(next);
-              const map = mapRef.current;
-              if (map?.getLayer('aid-resource-circles')) {
-                map.setLayoutProperty('aid-resource-circles', 'visibility', next ? 'visible' : 'none');
-                if (next) {
-                  // Reset source to show all resources when toggling on
-                  const src = map.getSource('aid-resources') as mapboxgl.GeoJSONSource | undefined;
-                  if (src) src.setData(aidResourcesToGeoJSON());
-                }
-              }
-            }}
+            onClick={() => setFiltersOpen((f) => !f)}
             className={cn(
-              'px-3 py-1.5 text-xs font-medium transition-colors rounded border border-border bg-card/90 backdrop-blur-md',
-              showAidResources ? 'bg-emerald-600 text-white border-emerald-500' : 'text-muted-foreground hover:bg-muted',
+              'flex items-center gap-2 px-4 py-2 text-xs font-semibold uppercase tracking-wider bg-card/95 backdrop-blur-md border border-border transition-colors',
+              filtersOpen ? 'text-foreground border-primary/50' : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            Aid Resources
-          </button>
-          <button
-            onClick={() => {
-              const next = !showFemaResources;
-              setShowFemaResources(next);
-              const map = mapRef.current;
-              if (map?.getLayer('fema-resource-circles')) {
-                map.setLayoutProperty('fema-resource-circles', 'visibility', next ? 'visible' : 'none');
-                if (next) {
-                  // Trigger initial load for current viewport
-                  const bounds = map.getBounds();
-                  const bbox = `${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()},${bounds.getSouth()}`;
-                  fetchFemaGeoJSON(bbox)
-                    .then((gj) => {
-                      const src = map.getSource('fema-resources') as mapboxgl.GeoJSONSource | undefined;
-                      if (src) src.setData(gj);
-                    })
-                    .catch((err) => console.warn('FEMA fetch error:', err));
-                }
-              }
-            }}
-            className={cn(
-              'px-3 py-1.5 text-xs font-medium transition-colors rounded border border-border bg-card/90 backdrop-blur-md',
-              showFemaResources ? 'bg-orange-600 text-white border-orange-500' : 'text-muted-foreground hover:bg-muted',
+            <Filter className="h-3.5 w-3.5" />
+            Filters
+            {[showAidResources, showFemaResources].filter(Boolean).length > 0 && (
+              <span className="flex items-center justify-center h-4 min-w-[16px] px-1 text-[9px] font-bold bg-primary text-primary-foreground">
+                {[showAidResources, showFemaResources].filter(Boolean).length}
+              </span>
             )}
-          >
-            FEMA Centers
+            <ChevronDown className={cn('h-3 w-3 transition-transform duration-200', filtersOpen && 'rotate-180')} />
           </button>
-          {mapMode === 'predictions' && (
-            <div className="flex rounded border border-border bg-card/90 backdrop-blur-md p-1 gap-0.5">
-              {(['Spring', 'Summer', 'Fall', 'Winter'] as const).map((s) => (
+
+          {filtersOpen && (
+            <div className="mt-px bg-card/95 backdrop-blur-md border border-border border-t-0 min-w-[220px]">
+              {/* Map Mode */}
+              <div className="px-3 pt-3 pb-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Map Mode</span>
+              </div>
+              <div className="px-1.5 pb-2 space-y-px">
                 <button
-                  key={s}
-                  onClick={() => setSeasonFilter(s)}
+                  onClick={() => setMapMode('current')}
                   className={cn(
-                    'px-2 py-1.5 text-xs font-medium transition-colors rounded',
-                    seasonFilter === s ? 'bg-indigo-600 text-white' : 'text-muted-foreground hover:bg-muted',
+                    'w-full flex items-center gap-2.5 px-2.5 py-1.5 text-xs transition-colors text-left',
+                    mapMode === 'current' ? 'text-foreground bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
                   )}
                 >
-                  {s}
+                  <span className={cn('h-1.5 w-1.5 shrink-0', mapMode === 'current' ? 'bg-primary' : 'bg-muted-foreground/30')} />
+                  Current Events
                 </button>
-              ))}
+                <button
+                  onClick={() => setMapMode('predictions')}
+                  className={cn(
+                    'w-full flex items-center gap-2.5 px-2.5 py-1.5 text-xs transition-colors text-left',
+                    mapMode === 'predictions' ? 'text-foreground bg-primary/10' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+                  )}
+                >
+                  <span className={cn('h-1.5 w-1.5 shrink-0', mapMode === 'predictions' ? 'bg-primary' : 'bg-muted-foreground/30')} />
+                  Seasonal Predictions
+                </button>
+              </div>
+
+              {/* Season picker */}
+              {mapMode === 'predictions' && (
+                <>
+                  <div className="border-t border-border/50" />
+                  <div className="px-3 pt-2.5 pb-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Season</span>
+                  </div>
+                  <div className="px-1.5 pb-2 grid grid-cols-2 gap-px">
+                    {(['Spring', 'Summer', 'Fall', 'Winter'] as const).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setSeasonFilter(s)}
+                        className={cn(
+                          'px-2.5 py-1.5 text-xs font-medium transition-colors text-center',
+                          seasonFilter === s ? 'bg-indigo-500/20 text-indigo-400' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+                        )}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Layers */}
+              <div className="border-t border-border/50" />
+              <div className="px-3 pt-2.5 pb-1.5">
+                <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Layers</span>
+              </div>
+              <div className="px-1.5 pb-3 space-y-px">
+                <button
+                  onClick={() => {
+                    const next = !showAidResources;
+                    setShowAidResources(next);
+                    const map = mapRef.current;
+                    if (map?.getLayer('aid-resource-circles')) {
+                      map.setLayoutProperty('aid-resource-circles', 'visibility', next ? 'visible' : 'none');
+                      if (next) {
+                        const src = map.getSource('aid-resources') as mapboxgl.GeoJSONSource | undefined;
+                        if (src) src.setData(aidResourcesToGeoJSON());
+                      }
+                    }
+                  }}
+                  className={cn(
+                    'w-full flex items-center gap-2.5 px-2.5 py-1.5 text-xs transition-colors text-left',
+                    showAidResources ? 'text-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+                  )}
+                >
+                  <span className={cn(
+                    'h-3 w-3 shrink-0 border flex items-center justify-center',
+                    showAidResources ? 'border-emerald-500 bg-emerald-500' : 'border-muted-foreground/30',
+                  )} />
+                  Aid Resources
+                </button>
+                <button
+                  onClick={() => {
+                    const next = !showFemaResources;
+                    setShowFemaResources(next);
+                    const map = mapRef.current;
+                    if (map?.getLayer('fema-resource-circles')) {
+                      map.setLayoutProperty('fema-resource-circles', 'visibility', next ? 'visible' : 'none');
+                      if (next) {
+                        const bounds = map.getBounds();
+                        const bbox = `${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()},${bounds.getSouth()}`;
+                        fetchFemaGeoJSON(bbox)
+                          .then((gj) => {
+                            const src = map.getSource('fema-resources') as mapboxgl.GeoJSONSource | undefined;
+                            if (src) src.setData(gj);
+                          })
+                          .catch((err) => console.warn('FEMA fetch error:', err));
+                      }
+                    }
+                  }}
+                  className={cn(
+                    'w-full flex items-center gap-2.5 px-2.5 py-1.5 text-xs transition-colors text-left',
+                    showFemaResources ? 'text-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted/50',
+                  )}
+                >
+                  <span className={cn(
+                    'h-3 w-3 shrink-0 border flex items-center justify-center',
+                    showFemaResources ? 'border-orange-500 bg-orange-500' : 'border-muted-foreground/30',
+                  )} />
+                  FEMA Centers
+                </button>
+              </div>
             </div>
           )}
         </div>
-        <div className="absolute top-4 right-4 z-[1000] flex items-center gap-2 px-3 py-2 rounded bg-card/90 backdrop-blur-md border border-border">
-          <img src={harborLogo} alt="Harbor" className="h-5 w-5 object-contain" />
-          <span className="font-heading text-xs font-semibold text-foreground">Harbor</span>
-          <span className="text-[10px] text-muted-foreground">— Interactive Disaster Map</span>
-        </div>
-        <div className="absolute top-14 left-4 z-[1000] px-3 py-2 rounded bg-card/90 backdrop-blur-md border border-border text-xs text-muted-foreground max-w-xs">
-          {mapMode === 'current'
-            ? 'NASA EONET \u2014 Active events happening now (last 14 days). Click markers for details.'
-            : `Predicted risk areas for ${seasonFilter} \u2014 based on where similar disasters have occurred in past ${seasonFilter}s. Click markers for details.`}
-        </div>
+
 
         {/* Mapbox GL container */}
         <div ref={containerRef} className="w-full h-full" />
