@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { fetchAlerts as fetchAlertsAPI, fetchHeadlines as fetchHeadlinesAPI, searchLocation as searchLocationAPI } from '@/lib/api';
 import { PageHeader } from '@/components/disaster/PageHeader';
+import newsBg from '@/assets/news-bg.png';
 
 /* ── Types ── */
 type Article = {
@@ -190,7 +191,8 @@ export default function DisasterNews() {
           <p className="text-muted-foreground text-sm py-4">No headlines available.</p>
         ) : (
           <div>
-            <div className="relative overflow-hidden rounded-lg border bg-card min-h-[180px]">
+            <div className="relative overflow-hidden rounded-lg border min-h-[220px]" style={{ backgroundImage: `url(${newsBg})`, backgroundSize: 'cover', backgroundPosition: 'center' }}>
+              <div className="absolute inset-0 bg-black/60" />
               {carouselItems.map((item, i) => (
                 <a
                   key={i}
