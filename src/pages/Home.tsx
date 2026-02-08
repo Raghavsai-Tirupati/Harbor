@@ -205,11 +205,8 @@ export default function Home() {
               transition={{ duration: 0.3, ease: 'easeInOut' }}
               className="fixed top-0 right-0 h-full w-3/4 sm:w-1/4 min-w-[260px] bg-black/85 backdrop-blur-xl border-l border-white/10 z-50 flex flex-col"
             >
-              <div className="flex items-center justify-between p-6 border-b border-white/10">
+              <div className="flex items-center p-6 border-b border-white/10">
                 <span className="font-heading text-sm tracking-[0.15em] uppercase text-white/50">Menu</span>
-                <button onClick={() => setSidebarOpen(false)} className="text-white/60 hover:text-white transition-colors">
-                  <X className="h-5 w-5" />
-                </button>
               </div>
               <nav className="flex-1 p-4 space-y-1">
                 {SIDEBAR_LINKS.map((link) => (
