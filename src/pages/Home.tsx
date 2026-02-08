@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { MapPin, ChevronLeft, ChevronRight } from 'lucide-react';
+import { MapPin, ChevronLeft, ChevronRight, Menu, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HeroVideoCarousel } from '@/components/HeroVideoCarousel';
 import { useState, useRef, useCallback } from 'react';
@@ -13,12 +13,21 @@ const HEADLINES = [
   { id: 6, title: 'Recovery Operations', subtitle: 'Recovery operations in progress', source: 'The Guardian', slug: 'recovery-ops' },
 ];
 
+const SIDEBAR_LINKS = [
+  { to: '/map', label: 'Disaster Map' },
+  { to: '/trends', label: 'Trends' },
+  { to: '/resources', label: 'Aid Resources' },
+  { to: '/ai', label: 'AI Assistant' },
+  { to: '/about', label: 'About' },
+];
+
 const VIDEOS_PER_HEADLINE = 2;
 
 const fade = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } };
 
 export default function Home() {
   const [activeIndex, setActiveIndex] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const videoChangeCountRef = useRef(0);
 
   // Every 2 video swaps, advance headline
@@ -80,7 +89,7 @@ export default function Home() {
             >
               <Link
                 to="/map"
-                className="w-72 py-5 text-center text-sm font-semibold tracking-[0.2em] uppercase bg-white text-black hover:bg-white/90 transition-colors flex items-center justify-center gap-2"
+                className="w-72 py-5 text-center text-sm font-semibold tracking-[0.2em] uppercase bg-white/20 backdrop-blur-sm border border-white/30 text-white hover:bg-white/30 transition-colors flex items-center justify-center gap-2"
               >
                 <MapPin className="h-4 w-4" />
                 DISASTER MAP
@@ -166,6 +175,57 @@ export default function Home() {
           </div>
         </div>
       </div>
+
+      {/* Menu trigger — top right */}
+      <button
+        onClick={() => setSidebarOpen(true)}
+        className="fixed top-5 right-6 z-30 p-2 text-white/60 hover:text-white transition-colors"
+        aria-label="Open menu"
+      >
+        <Menu className="h-6 w-6" />
+      </button>
+
+      {/* Sidebar overlay + panel */}
+      <AnimatePresence>
+        {sidebarOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25 }}
+              className="fixed inset-0 bg-black/50 z-40"
+              onClick={() => setSidebarOpen(false)}
+            />
+            <motion.div
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ duration: 0.3, ease: 'easeInOut' }}
+              className="fixed top-0 right-0 h-full w-3/4 sm:w-1/4 min-w-[260px] bg-black/90 backdrop-blur-xl border-l border-white/10 z-50 flex flex-col"
+            >
+              <div className="flex items-center justify-between p-6 border-b border-white/10">
+                <span className="text-xs tracking-[0.2em] uppercase text-white/40">Navigate</span>
+                <button onClick={() => setSidebarOpen(false)} className="text-white/60 hover:text-white transition-colors">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <nav className="flex-1 p-6 space-y-1">
+                {SIDEBAR_LINKS.map((link) => (
+                  <Link
+                    key={link.to}
+                    to={link.to}
+                    onClick={() => setSidebarOpen(false)}
+                    className="block py-4 px-4 text-sm font-semibold tracking-[0.15em] uppercase text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+                  >
+                    {link.label}
+                  </Link>
+                ))}
+              </nav>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
