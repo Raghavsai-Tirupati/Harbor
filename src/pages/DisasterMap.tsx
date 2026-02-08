@@ -936,7 +936,7 @@ export default function DisasterMap() {
   /* ── Render ──────────────────────────────────────────────────────── */
   return (
     <div className="h-[calc(100vh-4rem)] flex flex-row w-full">
-      <div className="w-3/4 h-full relative flex-shrink-0">
+      <div className="flex-1 h-full relative min-w-0">
         {/* Click-away backdrop for filters */}
         {filtersOpen && (
           <div className="fixed inset-0 z-[999]" onClick={() => setFiltersOpen(false)} />

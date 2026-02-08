@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, X, MapPin, AlertTriangle } from 'lucide-react';
+import { Send, Bot, User, X, MapPin, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { findNearbyResources, RESOURCE_TYPE_LABELS, type NearbyResult } from '@/data/aidResources';
@@ -277,7 +277,9 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   /* keep latest callback in ref so async send() always has it */
   const onCommandRef = useRef(onCommand);
@@ -286,6 +288,22 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  /* Auto-resize textarea as user types */
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
+  }, [input]);
+
+  const toggleExpand = () => {
+    setIsExpanded((prev) => !prev);
+    // Fire resize events during transition so the map redraws smoothly
+    [0, 100, 200, 350].forEach((ms) =>
+      setTimeout(() => window.dispatchEvent(new Event('resize')), ms),
+    );
+  };
 
   const send = async (text: string) => {
     if (!text.trim() || isLoading) return;
@@ -341,24 +359,41 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
   const quickActions = getQuickActions(selectedContext);
 
   return (
-    <div className="w-1/4 flex-shrink-0 flex flex-col h-full bg-card border-l border-border">
+    <div className={cn(
+      'flex-shrink-0 flex flex-col h-full bg-card border-l border-border relative transition-all duration-300',
+      isExpanded ? 'w-1/2' : 'w-1/4',
+    )}>
+      {/* Clickable left edge to expand/collapse */}
+      <div
+        onClick={toggleExpand}
+        className="absolute left-0 top-0 bottom-0 w-1 bg-border hover:bg-primary/50 cursor-col-resize transition-colors z-20"
+        title={isExpanded ? 'Click to collapse' : 'Click to expand'}
+      />
+
       {/* Header */}
       <div className="px-4 py-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-disaster-purple/20 flex items-center justify-center">
-            <Bot className="h-4 w-4 text-disaster-purple" />
+          <div className="w-7 h-7 bg-primary/10 flex items-center justify-center">
+            <Bot className="h-4 w-4 text-primary" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <h2 className="text-sm font-semibold">Harbor AI</h2>
-            <p className="text-[10px] text-muted-foreground">Disaster assistant &middot; Map control</p>
+            <p className="text-[10px] text-muted-foreground">Disaster assistant</p>
           </div>
+          <button
+            onClick={toggleExpand}
+            className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
+            title={isExpanded ? 'Collapse' : 'Expand'}
+          >
+            {isExpanded ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
+          </button>
         </div>
       </div>
 
       {/* Context chip */}
       {selectedContext && (
         <div className="px-3 py-2 border-b border-border shrink-0">
-          <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted text-xs">
+          <div className="flex items-center gap-2 px-2.5 py-1.5 bg-muted text-xs">
             {selectedContext.type === 'event' ? (
               <AlertTriangle className="h-3 w-3 text-disaster-amber shrink-0" />
             ) : (
@@ -380,8 +415,8 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-0">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-4 px-2">
-            <div className="w-10 h-10 rounded-2xl bg-disaster-purple/10 flex items-center justify-center">
-              <Bot className="h-5 w-5 text-disaster-purple" />
+            <div className="w-10 h-10 bg-primary/10 flex items-center justify-center">
+              <Bot className="h-5 w-5 text-primary" />
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
               Ask about disasters, safety, or say <strong>&ldquo;show me a cyclone&rdquo;</strong> to control the map.
@@ -391,7 +426,7 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
                 <button
                   key={a.label}
                   onClick={() => send(a.prompt)}
-                  className="px-3 py-2 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-left"
+                  className="px-3 py-2 border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors text-left"
                 >
                   {a.label}
                 </button>
@@ -403,16 +438,16 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
         {messages.map((m, i) => (
           <div key={i} className={cn('flex gap-2', m.role === 'user' ? 'justify-end' : 'justify-start')}>
             {m.role === 'assistant' && (
-              <div className="w-6 h-6 rounded-full bg-disaster-purple/10 flex items-center justify-center shrink-0 mt-0.5">
-                <Bot className="h-3 w-3 text-disaster-purple" />
+              <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                <Bot className="h-3 w-3 text-primary" />
               </div>
             )}
             <div
               className={cn(
-                'max-w-[85%] rounded-xl px-3 py-2 text-xs leading-relaxed',
+                'max-w-[85%] px-3 py-2 text-xs leading-relaxed',
                 m.role === 'user'
-                  ? 'bg-primary text-primary-foreground rounded-br-sm'
-                  : 'bg-muted rounded-bl-sm',
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted',
               )}
             >
               <div
@@ -430,10 +465,10 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
 
         {isLoading && (
           <div className="flex gap-2">
-            <div className="w-6 h-6 rounded-full bg-disaster-purple/10 flex items-center justify-center shrink-0">
-              <Bot className="h-3 w-3 text-disaster-purple" />
+            <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+              <Bot className="h-3 w-3 text-primary" />
             </div>
-            <div className="bg-muted rounded-xl rounded-bl-sm px-3 py-2">
+            <div className="bg-muted px-3 py-2">
               <div className="flex gap-1">
                 <div className="w-1.5 h-1.5 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
                 <div className="w-1.5 h-1.5 bg-muted-foreground/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -453,7 +488,7 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
               key={a.label}
               onClick={() => send(a.prompt)}
               disabled={isLoading}
-              className="px-2.5 py-1 rounded-full border border-border text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+              className="px-2.5 py-1 border border-border text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50"
             >
               {a.label}
             </button>
@@ -465,19 +500,28 @@ export default function ChatPanel({ selectedContext, onClearContext, onCommand, 
       <div className="px-3 pb-3 pt-1 shrink-0">
         <form
           onSubmit={(e) => { e.preventDefault(); send(input); }}
-          className="flex items-center gap-2 bg-muted rounded-xl px-3 py-2 border border-border focus-within:ring-1 focus-within:ring-primary/30"
+          className="flex items-end gap-2 bg-muted px-3 py-2 border border-border focus-within:ring-1 focus-within:ring-primary/30"
         >
-          <input
+          <textarea
+            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                send(input);
+              }
+            }}
             placeholder="Ask Harbor AI..."
-            className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground min-w-0"
+            className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground min-w-0 resize-none leading-relaxed"
+            rows={1}
             disabled={isLoading}
+            style={{ maxHeight: '160px', overflowY: input.split('\n').length > 6 ? 'auto' : 'hidden' }}
           />
           <button
             type="submit"
             disabled={!input.trim() || isLoading}
-            className="shrink-0 w-6 h-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-40 hover:opacity-90 transition-opacity"
+            className="shrink-0 w-6 h-6 bg-primary text-primary-foreground flex items-center justify-center disabled:opacity-40 hover:opacity-90 transition-opacity"
           >
             <Send className="h-3 w-3" />
           </button>
