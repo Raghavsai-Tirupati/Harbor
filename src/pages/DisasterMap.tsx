@@ -269,7 +269,7 @@ function addOverlay(
 
   for (const f of geojson.features || []) {
     const props = f.properties || {};
-    const catId = props.categories?.[0]?.id ?? (f as PredictionFeature).properties?.categoryId;
+    const catId = 'categories' in props ? props.categories?.[0]?.id : (props as PredictionFeature['properties']).categoryId;
     const { fill: fillColor, stroke: strokeColor } = getCategoryColor(catId, isPrediction);
 
     if (isPrediction && 'categoryId' in props) {
@@ -426,7 +426,7 @@ export default function DisasterMap() {
       Promise.all([...eonetReqs, ...usgsReqs])
         .then((results) => {
           const eonetAll = results.slice(0, PREDICTION_YEARS) as { features?: EONETFeature[] }[];
-          const usgsAll = results.slice(PREDICTION_YEARS) as { features?: { geometry?: { coordinates?: number[] }; properties?: { mag?: number; place?: string } }[] }[];
+          const usgsAll = results.slice(PREDICTION_YEARS) as { features?: { geometry?: { coordinates?: number[] }; properties?: { mag?: number; place?: string; time?: number } }[] }[];
           const eonetFeatures: EONETFeature[] = [];
           for (const data of eonetAll) {
             for (const f of data.features || []) {
@@ -435,7 +435,7 @@ export default function DisasterMap() {
               if (monthInSeason(month, seasonFilter)) eonetFeatures.push(f);
             }
           }
-          const usgsFeatures: { geometry?: { coordinates?: number[] }; properties?: { mag?: number; place?: string } }[] = [];
+          const usgsFeatures: { geometry?: { coordinates?: number[] }; properties?: { mag?: number; place?: string; time?: number } }[] = [];
           for (const data of usgsAll) {
             for (const f of data.features || []) {
               const time = f.properties?.time;
