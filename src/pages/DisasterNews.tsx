@@ -1,23 +1,21 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
-import { MapPin, Newspaper, Filter } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { MapPin, Newspaper, Filter, Search, ExternalLink, ChevronDown, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-
-const API_BASE = '/api';
+import { fetchEonet, fetchEventNews } from '@/lib/disasterApi';
 
 const CATEGORY_WEIGHTS: Record<string, number> = {
   severeStorms: 1.0,
   volcanoes: 0.95,
+  earthquakes: 0.9,
   floods: 0.9,
   wildfires: 0.85,
   landslides: 0.8,
   seaLakeIce: 0.7,
-  earthquakes: 0.9,
+  temperatureExtremes: 0.75,
   droughts: 0.65,
   snow: 0.6,
-  temperatureExtremes: 0.75,
   other: 0.5,
 };
 
@@ -35,6 +33,21 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: 'Other',
 };
 
+const CATEGORY_COLORS: Record<string, string> = {
+  severeStorms: 'bg-sky-500/20 text-sky-400 border-sky-500/30',
+  wildfires: 'bg-red-500/20 text-red-400 border-red-500/30',
+  volcanoes: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+  earthquakes: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+  floods: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
+  landslides: 'bg-stone-500/20 text-stone-400 border-stone-500/30',
+  droughts: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+  seaLakeIce: 'bg-teal-500/20 text-teal-400 border-teal-500/30',
+  snow: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30',
+  temperatureExtremes: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+};
+
+type Article = { url: string; title: string; source?: string; publishedAt?: string };
+
 type EventItem = {
   id: string;
   title: string;
@@ -47,14 +60,18 @@ type EventItem = {
   sources: { url?: string }[];
   urgencyScore: number;
   urgencyBadge: 'High' | 'Medium' | 'Low';
-  articles?: { url: string; title: string; source?: string }[];
+  articles?: Article[];
+  newsLoaded?: boolean;
+  newsLoading?: boolean;
 };
 
 const DAYS_OPTIONS = [
-  { label: 'Last 24h', days: 1 },
+  { label: '24h', days: 1 },
   { label: '3 days', days: 3 },
   { label: '7 days', days: 7 },
 ];
+
+const AUTO_FETCH_COUNT = 10;
 
 function getCentroid(geom: { type: string; coordinates: number[] | number[][][] }): { lat: number; lon: number } {
   if (geom.type === 'Point' && Array.isArray(geom.coordinates)) {
@@ -70,20 +87,23 @@ function getCentroid(geom: { type: string; coordinates: number[] | number[][][] 
   return { lat: 0, lon: 0 };
 }
 
-function computeUrgencyScore(
-  f: { properties?: { date?: string; closed?: string; magnitudeValue?: number; categories?: { id?: string }[] }; geometry?: unknown },
-  newsCount: number
-): number {
-  const props = f.properties || {};
-  const dateStr = props.date || props.closed || new Date().toISOString();
-  const ageHours = (Date.now() - new Date(dateStr).getTime()) / (1000 * 60 * 60);
+function computeUrgencyScore(date: string, magnitudeValue?: number, categoryId?: string): number {
+  const ageHours = (Date.now() - new Date(date).getTime()) / (1000 * 60 * 60);
   const recency = Math.max(0, 1 - ageHours / (7 * 24));
-  const mag = props.magnitudeValue ?? 0;
+  const mag = magnitudeValue ?? 0;
   const magNorm = Math.min(1, mag / 100);
-  const catId = props.categories?.[0]?.id || 'other';
-  const catWeight = CATEGORY_WEIGHTS[catId] ?? 0.5;
-  const newsNorm = Math.min(1, newsCount / 5);
-  return recency * 0.4 + magNorm * 0.2 + catWeight * 0.3 + newsNorm * 0.1;
+  const catWeight = CATEGORY_WEIGHTS[categoryId || 'other'] ?? 0.5;
+  return recency * 0.45 + magNorm * 0.2 + catWeight * 0.35;
+}
+
+function timeAgo(dateStr: string): string {
+  const ms = Date.now() - new Date(dateStr).getTime();
+  const hours = Math.floor(ms / (1000 * 60 * 60));
+  if (hours < 1) return 'Just now';
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return '1 day ago';
+  return `${days} days ago`;
 }
 
 function viewOnMap(event: EventItem) {
@@ -96,207 +116,313 @@ export default function DisasterNews() {
   const [loading, setLoading] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [daysFilter, setDaysFilter] = useState(3);
-  const [loadingNewsFor, setLoadingNewsFor] = useState<Set<string>>(new Set());
-  const [eventsWithNews, setEventsWithNews] = useState<Map<string, EventItem>>(new Map());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
+  const autoFetchedRef = useRef(false);
 
-  const fetchEvents = useCallback(async () => {
+  // Fetch EONET events
+  const loadEvents = useCallback(async () => {
     setLoading(true);
+    autoFetchedRef.current = false;
     try {
-      const res = await fetch(`${API_BASE}/eonet-events?status=open&days=14`);
-      const data = await res.json();
+      const data = await fetchEonet({ bbox: '-180,85,180,-85', status: 'open', days: '14' });
       const features = (data.features || []) as Array<{
         id?: string;
-        properties?: { id?: string; title?: string; date?: string; closed?: string; magnitudeValue?: number; categories?: { id?: string }[]; sources?: { url?: string }[] };
+        properties?: {
+          id?: string; title?: string; date?: string; closed?: string;
+          magnitudeValue?: number; categories?: { id?: string }[];
+          sources?: { url?: string }[];
+        };
         geometry?: { type: string; coordinates: number[] | number[][][] };
       }>;
+
       const items: EventItem[] = features.map((f) => {
         const centroid = getCentroid(f.geometry || { type: 'Point', coordinates: [0, 0] });
         const catId = f.properties?.categories?.[0]?.id || 'other';
+        const date = f.properties?.date || f.properties?.closed || new Date().toISOString();
         return {
           id: f.properties?.id || f.id || `evt-${Math.random()}`,
           title: f.properties?.title || 'Event',
           category: catId,
           categoryLabel: CATEGORY_LABELS[catId] || catId,
-          date: f.properties?.date || f.properties?.closed || new Date().toISOString(),
+          date,
           lat: centroid.lat,
           lon: centroid.lon,
           magnitudeValue: f.properties?.magnitudeValue,
           sources: f.properties?.sources || [],
-          urgencyScore: 0,
+          urgencyScore: computeUrgencyScore(date, f.properties?.magnitudeValue, catId),
           urgencyBadge: 'Medium' as const,
         };
       });
-      const withScores = items.map((e) => ({ ...e, urgencyScore: computeUrgencyScore(
-        { properties: { date: e.date, magnitudeValue: e.magnitudeValue, categories: [{ id: e.category }] } },
-        0
-      ) }));
-      withScores.sort((a, b) => b.urgencyScore - a.urgencyScore);
-      const sorted = withScores.map((e, i) => {
-        const pct = (i + 1) / withScores.length;
+
+      items.sort((a, b) => b.urgencyScore - a.urgencyScore);
+      const ranked = items.map((e, i) => {
+        const pct = (i + 1) / items.length;
         let badge: 'High' | 'Medium' | 'Low' = 'Medium';
         if (pct <= 0.2) badge = 'High';
         else if (pct > 0.7) badge = 'Low';
         return { ...e, urgencyBadge: badge };
       });
-      setEvents(sorted);
-      setEventsWithNews(new Map());
-    } catch (e) {
-      console.error(e);
+
+      setEvents(ranked);
+    } catch (err) {
+      console.error('Failed to load events:', err);
       setEvents([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    fetchEvents();
-  }, [fetchEvents]);
+  useEffect(() => { loadEvents(); }, [loadEvents]);
 
-  const loadNewsFor = useCallback(async (event: EventItem) => {
-    if (eventsWithNews.has(event.id)) return;
-    setLoadingNewsFor((s) => new Set(s).add(event.id));
+  // Auto-fetch news for top events
+  const loadNewsForEvent = useCallback(async (eventId: string) => {
+    setEvents((prev) => prev.map((e) => e.id === eventId ? { ...e, newsLoading: true } : e));
+    const event = events.find((e) => e.id === eventId);
+    if (!event) return;
+
     try {
-      const params = new URLSearchParams({
+      const data = await fetchEventNews({
         title: event.title,
-        lat: String(event.lat),
-        lon: String(event.lon),
-        days: String(daysFilter),
+        lat: event.lat,
+        lon: event.lon,
+        days: daysFilter,
         categoryId: event.category,
       });
-      const res = await fetch(`${API_BASE}/event-news?${params}`);
-      const data = await res.json();
-      const articles = (data.articles || []).slice(0, 5);
-      setEventsWithNews((m) => new Map(m).set(event.id, { ...event, articles }));
+      const articles = (data.articles || []).slice(0, 10) as Article[];
+      setEvents((prev) => prev.map((e) =>
+        e.id === eventId ? { ...e, articles, newsLoaded: true, newsLoading: false } : e
+      ));
     } catch {
-      setEventsWithNews((m) => new Map(m).set(event.id, { ...event, articles: [] }));
-    } finally {
-      setLoadingNewsFor((s) => {
-        const n = new Set(s);
-        n.delete(event.id);
-        return n;
-      });
+      setEvents((prev) => prev.map((e) =>
+        e.id === eventId ? { ...e, articles: [], newsLoaded: true, newsLoading: false } : e
+      ));
     }
-  }, [daysFilter]);
+  }, [events, daysFilter]);
 
-  const filtered = categoryFilter === 'all'
-    ? events
-    : events.filter((e) => e.category === categoryFilter);
+  // Auto-fetch news for top N events once loaded
+  useEffect(() => {
+    if (loading || autoFetchedRef.current || events.length === 0) return;
+    autoFetchedRef.current = true;
+    const topEvents = events.slice(0, AUTO_FETCH_COUNT);
+    // Stagger fetches to avoid hammering the API
+    topEvents.forEach((evt, i) => {
+      setTimeout(() => loadNewsForEvent(evt.id), i * 500);
+    });
+  }, [loading, events.length]);
+
+  // Filtered list
+  const filtered = events
+    .filter((e) => categoryFilter === 'all' || e.category === categoryFilter)
+    .filter((e) => !searchQuery.trim() || e.title.toLowerCase().includes(searchQuery.toLowerCase()));
 
   const categories = ['all', ...new Set(events.map((e) => e.category))];
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
-      <div className="mb-8">
-        <h1 className="font-heading text-3xl md:4xl font-bold">Natural Disaster News</h1>
-        <p className="text-muted-foreground mt-2">
-          Active events sorted by urgency. Click an event to load related headlines.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap gap-4 mb-8">
-        <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm text-muted-foreground">Time:</span>
-          {DAYS_OPTIONS.map((o) => (
-            <Button
-              key={o.days}
-              variant={daysFilter === o.days ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setDaysFilter(o.days)}
-            >
-              {o.label}
-            </Button>
-          ))}
+    <div className="min-h-screen bg-background">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10">
+        {/* Header */}
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-2">
+            <AlertTriangle className="h-6 w-6 text-amber-500" />
+            <h1 className="font-heading text-3xl font-bold">Disaster News</h1>
+          </div>
+          <p className="text-muted-foreground">
+            Real-time natural disaster events from NASA EONET with related news articles. Sorted by urgency.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Category:</span>
+
+        {/* Controls */}
+        <div className="flex flex-wrap items-center gap-3 mb-6 p-4 rounded-lg bg-card border border-border">
+          <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+            <Search className="h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search events..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="flex-1 bg-transparent border-none outline-none text-sm placeholder:text-muted-foreground"
+            />
+          </div>
+          <div className="h-6 w-px bg-border hidden sm:block" />
+          <div className="flex items-center gap-2">
+            <Filter className="h-4 w-4 text-muted-foreground" />
+            {DAYS_OPTIONS.map((o) => (
+              <Button
+                key={o.days}
+                variant={daysFilter === o.days ? 'default' : 'outline'}
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => {
+                  setDaysFilter(o.days);
+                  // Re-fetch news with new time window
+                  setEvents((prev) => prev.map((e) => ({ ...e, newsLoaded: false, articles: undefined })));
+                  autoFetchedRef.current = false;
+                }}
+              >
+                {o.label}
+              </Button>
+            ))}
+          </div>
+          <div className="h-6 w-px bg-border hidden sm:block" />
           <select
-            className="border rounded px-3 py-1.5 text-sm bg-background"
+            className="border rounded px-2 py-1 text-xs bg-background"
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
           >
             {categories.map((c) => (
               <option key={c} value={c}>
-                {c === 'all' ? 'All' : CATEGORY_LABELS[c] || c}
+                {c === 'all' ? 'All Categories' : CATEGORY_LABELS[c] || c}
               </option>
             ))}
           </select>
         </div>
-      </div>
 
-      {loading ? (
-        <div className="text-muted-foreground py-12">Loading events…</div>
-      ) : filtered.length === 0 ? (
-        <div className="text-muted-foreground py-12">No active events found.</div>
-      ) : (
-        <div className="space-y-4">
-          {filtered.slice(0, 25).map((event) => {
-            const withNews = eventsWithNews.get(event.id);
-            const loadingNews = loadingNewsFor.has(event.id);
-            const hasLoaded = withNews !== undefined;
-            return (
-              <div
-                key={event.id}
-                className="bg-card border border-border rounded-lg p-4 hover:border-primary/30 transition-colors"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-semibold">{event.title}</h3>
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          event.urgencyBadge === 'High' && 'border-red-500 text-red-600',
-                          event.urgencyBadge === 'Medium' && 'border-amber-500 text-amber-600',
-                          event.urgencyBadge === 'Low' && 'border-slate-500 text-slate-600'
+        {/* Event count */}
+        {!loading && (
+          <p className="text-xs text-muted-foreground mb-4">
+            Showing {filtered.length} of {events.length} active events
+          </p>
+        )}
+
+        {/* Content */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20 gap-3">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            <span className="text-muted-foreground">Loading disaster events...</span>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-20 text-muted-foreground">
+            No active events found matching your filters.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filtered.map((event) => {
+              const isExpanded = expandedEvents.has(event.id);
+              const articles = event.articles || [];
+              const visibleArticles = isExpanded ? articles : articles.slice(0, 3);
+
+              return (
+                <div
+                  key={event.id}
+                  className="bg-card border border-border rounded-lg overflow-hidden hover:border-primary/20 transition-colors"
+                >
+                  {/* Event header */}
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              'text-[10px] px-1.5 py-0',
+                              event.urgencyBadge === 'High' && 'border-red-500/50 text-red-500 bg-red-500/10',
+                              event.urgencyBadge === 'Medium' && 'border-amber-500/50 text-amber-500 bg-amber-500/10',
+                              event.urgencyBadge === 'Low' && 'border-slate-500/50 text-slate-500 bg-slate-500/10'
+                            )}
+                          >
+                            {event.urgencyBadge}
+                          </Badge>
+                          <span className={cn(
+                            'text-[10px] px-1.5 py-0.5 rounded-full border',
+                            CATEGORY_COLORS[event.category] || 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+                          )}>
+                            {event.categoryLabel}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">{timeAgo(event.date)}</span>
+                        </div>
+                        <h3 className="font-semibold text-sm">{event.title}</h3>
+
+                        {/* Official sources */}
+                        {event.sources.filter((s) => s.url).length > 0 && (
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {event.sources.filter((s) => s.url).map((s, i) => (
+                              <a
+                                key={i}
+                                href={s.url}
+                                target="_blank"
+                                rel="noopener"
+                                className="text-[10px] text-primary hover:underline inline-flex items-center gap-0.5"
+                              >
+                                <ExternalLink className="h-2.5 w-2.5" />
+                                Official Source {i + 1}
+                              </a>
+                            ))}
+                          </div>
                         )}
-                      >
-                        {event.urgencyBadge}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">{event.categoryLabel}</span>
-                    </div>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Last updated: {new Date(event.date).toLocaleDateString()}
-                    </p>
-                    {!hasLoaded && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="mt-2"
-                        onClick={() => loadNewsFor(event)}
-                        disabled={loadingNews}
-                      >
-                        <Newspaper className="h-4 w-4 mr-1" />
-                        {loadingNews ? 'Fetching…' : 'Load headlines'}
+                      </div>
+                      <Button variant="outline" size="sm" className="h-7 text-xs flex-shrink-0" onClick={() => viewOnMap(event)}>
+                        <MapPin className="h-3 w-3 mr-1" />
+                        Map
                       </Button>
-                    )}
-                    {withNews && (withNews.articles || []).length > 0 && (
-                      <div className="mt-3 space-y-1">
-                        <strong className="text-xs">Related headlines:</strong>
-                        {(withNews.articles || []).map((a, i) => (
+                    </div>
+                  </div>
+
+                  {/* News articles */}
+                  {event.newsLoading && (
+                    <div className="px-4 pb-3 flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Loading news...
+                    </div>
+                  )}
+
+                  {event.newsLoaded && articles.length > 0 && (
+                    <div className="border-t border-border px-4 py-3 bg-muted/30">
+                      <div className="flex items-center gap-1 mb-2">
+                        <Newspaper className="h-3 w-3 text-muted-foreground" />
+                        <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                          Related News ({articles.length})
+                        </span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {visibleArticles.map((a, i) => (
                           <a
                             key={i}
                             href={a.url}
                             target="_blank"
                             rel="noopener"
-                            className="block text-xs text-primary hover:underline truncate"
+                            className="flex items-baseline gap-2 text-xs hover:bg-muted/50 rounded px-1 py-0.5 -mx-1 transition-colors group"
                           >
-                            {a.title?.slice(0, 80)}…
+                            <span className="text-primary group-hover:underline flex-1 line-clamp-1">
+                              {a.title}
+                            </span>
+                            {a.source && (
+                              <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                                {a.source}
+                              </span>
+                            )}
                           </a>
                         ))}
                       </div>
-                    )}
-                  </div>
-                  <Button size="sm" onClick={() => viewOnMap(event)}>
-                    <MapPin className="h-4 w-4 mr-1" />
-                    View on Map
-                  </Button>
+                      {articles.length > 3 && !isExpanded && (
+                        <button
+                          onClick={() => setExpandedEvents((s) => new Set(s).add(event.id))}
+                          className="text-[10px] text-primary hover:underline mt-2 inline-flex items-center gap-0.5"
+                        >
+                          <ChevronDown className="h-3 w-3" />
+                          Show {articles.length - 3} more
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {!event.newsLoaded && !event.newsLoading && (
+                    <div className="border-t border-border px-4 py-2">
+                      <button
+                        onClick={() => loadNewsForEvent(event.id)}
+                        className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                      >
+                        <Newspaper className="h-3 w-3" />
+                        Load related news
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
