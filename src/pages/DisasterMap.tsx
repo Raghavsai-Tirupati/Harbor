@@ -447,22 +447,44 @@ export default function DisasterMap() {
 
   /* ── Initialize Mapbox GL map (runs once) ────────────────────────── */
   useEffect(() => {
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!token) {
-      setMapError('Add your Mapbox token to .env as VITE_MAPBOX_TOKEN');
-      return;
-    }
-    if (!containerRef.current) return;
+    let cancelled = false;
 
-    mapboxgl.accessToken = token;
+    async function initMap() {
+      /* Fetch Mapbox token from backend */
+      let token: string | null = null;
+      try {
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+        const res = await fetch(`${supabaseUrl}/functions/v1/mapbox-token`, {
+          headers: {
+            'Authorization': `Bearer ${supabaseKey}`,
+            'apikey': supabaseKey,
+          },
+        });
+        if (!res.ok) throw new Error('Failed to fetch Mapbox token');
+        const data = await res.json();
+        token = data.token;
+      } catch (e) {
+        console.error('Mapbox token fetch error:', e);
+        if (!cancelled) setMapError('Failed to load Mapbox token from backend.');
+        return;
+      }
 
-    const map = new mapboxgl.Map({
-      container: containerRef.current,
-      style: 'mapbox://styles/mapbox/dark-v11',
-      center: [0, 20],
-      zoom: 1.5,
-      projection: 'globe',
-    });
+      if (!token) {
+        if (!cancelled) setMapError('Mapbox token not configured in backend.');
+        return;
+      }
+      if (cancelled || !containerRef.current) return;
+
+      mapboxgl.accessToken = token;
+
+      const map = new mapboxgl.Map({
+        container: containerRef.current,
+        style: 'mapbox://styles/mapbox/dark-v11',
+        center: [0, 20],
+        zoom: 1.5,
+        projection: 'globe',
+      });
 
     map.addControl(new mapboxgl.NavigationControl(), 'bottom-right');
 
@@ -627,11 +649,18 @@ export default function DisasterMap() {
     map.on('zoomstart', pauseRotation);
     map.on('zoomend', scheduleResume);
 
+    } // end initMap
+
+    initMap();
+
     return () => {
+      cancelled = true;
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-      map.remove();
-      mapRef.current = null;
-      mapReadyRef.current = false;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+        mapReadyRef.current = false;
+      }
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

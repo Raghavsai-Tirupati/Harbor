@@ -1,1 +1,16 @@
 project_id = "fbedtzmtpmnfgryflwfd"
+
+[functions.chat-ai]
+verify_jwt = false
+
+[functions.mapbox-token]
+verify_jwt = false
+
+[functions.earthquakes]
+verify_jwt = false
+
+[functions.eonet]
+verify_jwt = false
+
+[functions.event-news]
+verify_jwt = false
