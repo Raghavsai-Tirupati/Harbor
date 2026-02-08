@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { MapPin, ChevronLeft, ChevronRight, Menu, X } from 'lucide-react';
+import { MapPin, ChevronLeft, ChevronRight, Menu, X, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { HeroVideoCarousel } from '@/components/HeroVideoCarousel';
 import { useState, useRef, useCallback } from 'react';
@@ -13,17 +13,70 @@ const HEADLINES = [
   { id: 6, title: 'Recovery Operations', subtitle: 'Recovery operations in progress', source: 'The Guardian', slug: 'recovery-ops' },
 ];
 
-const SIDEBAR_LINKS = [
-  { to: '/map', label: 'Disaster Map' },
-  { to: '/trends', label: 'Trends' },
-  { to: '/resources', label: 'Aid Resources' },
-  { to: '/ai', label: 'AI Assistant' },
-  { to: '/about', label: 'About' },
+const SIDEBAR_SECTIONS = [
+  {
+    label: 'Home',
+    children: [
+      { to: '/', label: 'Overview' },
+    ],
+  },
+  {
+    label: 'Explore',
+    children: [
+      { to: '/map', label: 'Disaster Map' },
+      { to: '/trends', label: 'Trends' },
+      { to: '/resources', label: 'Aid Resources' },
+      { to: '/ai', label: 'AI Assistant' },
+      { to: '/about', label: 'About' },
+    ],
+  },
 ];
 
 const VIDEOS_PER_HEADLINE = 2;
 
 const fade = { hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } };
+
+function SidebarSection({ section, onNavigate }: { section: typeof SIDEBAR_SECTIONS[number]; onNavigate: () => void }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-4 py-3 font-heading text-sm font-semibold tracking-[0.15em] uppercase text-white/70 hover:text-white transition-colors"
+      >
+        {section.label}
+        <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.25 }}>
+          <ChevronDown className="h-4 w-4" />
+        </motion.span>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            <div className="ml-4 border-l border-white/10 pl-4 py-1 space-y-1">
+              {section.children.map((child) => (
+                <Link
+                  key={child.to}
+                  to={child.to}
+                  onClick={onNavigate}
+                  className="block py-2.5 px-3 font-heading text-sm tracking-wide text-white/50 hover:text-white hover:bg-white/5 transition-colors"
+                >
+                  {child.label}
+                </Link>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 export default function Home() {
   const [activeIndex, setActiveIndex] = useState(0);
@@ -202,24 +255,17 @@ export default function Home() {
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
               transition={{ duration: 0.3, ease: 'easeInOut' }}
-              className="fixed top-0 right-0 h-full w-3/4 sm:w-1/4 min-w-[260px] bg-black/90 backdrop-blur-xl border-l border-white/10 z-50 flex flex-col"
+              className="fixed top-0 right-0 h-full w-3/4 sm:w-1/4 min-w-[260px] bg-black/85 backdrop-blur-xl border-l border-white/10 z-50 flex flex-col"
             >
               <div className="flex items-center justify-between p-6 border-b border-white/10">
-                <span className="text-xs tracking-[0.2em] uppercase text-white/40">Navigate</span>
+                <span className="font-heading text-sm tracking-[0.15em] uppercase text-white/50">Menu</span>
                 <button onClick={() => setSidebarOpen(false)} className="text-white/60 hover:text-white transition-colors">
                   <X className="h-5 w-5" />
                 </button>
               </div>
-              <nav className="flex-1 p-6 space-y-1">
-                {SIDEBAR_LINKS.map((link) => (
-                  <Link
-                    key={link.to}
-                    to={link.to}
-                    onClick={() => setSidebarOpen(false)}
-                    className="block py-4 px-4 text-sm font-semibold tracking-[0.15em] uppercase text-white/60 hover:text-white hover:bg-white/5 transition-colors"
-                  >
-                    {link.label}
-                  </Link>
+              <nav className="flex-1 p-4 space-y-2">
+                {SIDEBAR_SECTIONS.map((section) => (
+                  <SidebarSection key={section.label} section={section} onNavigate={() => setSidebarOpen(false)} />
                 ))}
               </nav>
             </motion.div>
