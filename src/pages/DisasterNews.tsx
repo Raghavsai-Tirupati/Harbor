@@ -170,7 +170,9 @@ export default function DisasterNews() {
   const moreArticles = headlines.slice(6, 20);
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
+    <div className="min-h-screen relative" style={{ backgroundImage: `url(${newsBg})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }}>
+      <div className="absolute inset-0 bg-black/60" />
+      <div className="relative max-w-5xl mx-auto px-4 sm:px-6 py-6">
       <PageHeader
         title="Natural Disaster News"
         description="Live alerts, breaking headlines, and location-based disaster search."
@@ -191,8 +193,7 @@ export default function DisasterNews() {
           <p className="text-muted-foreground text-sm py-4">No headlines available.</p>
         ) : (
           <div>
-            <div className="relative overflow-hidden rounded-lg border min-h-[220px]" style={{ backgroundImage: `url(${newsBg})`, backgroundSize: 'cover', backgroundPosition: 'center' }}>
-              <div className="absolute inset-0 bg-black/60" />
+            <div className="relative overflow-hidden rounded-lg border bg-card/80 backdrop-blur-sm min-h-[180px]">
               {carouselItems.map((item, i) => (
                 <a
                   key={i}
@@ -405,6 +406,7 @@ export default function DisasterNews() {
         )}
       </div>
 
+      </div>
     </div>
   );
 }
