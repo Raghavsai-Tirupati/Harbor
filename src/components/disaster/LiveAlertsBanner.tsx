@@ -1,7 +1,7 @@
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { X } from 'lucide-react';
-import { API_BASE } from '@/lib/api';
+import { fetchAlerts as fetchAlertsAPI } from '@/lib/api';
 
 type AlertItem = {
   id: string;
@@ -36,9 +36,7 @@ export function LiveAlertsBanner() {
     try {
       setLoading(true);
       setError(false);
-      const res = await fetch(`${API_BASE}/alerts`);
-      if (!res.ok) throw new Error('Failed to fetch');
-      const data = await res.json();
+      const data = await fetchAlertsAPI();
       const items: AlertItem[] = (data.alerts || []).map((a: AlertItem) => ({
         id: a.id,
         alertText: a.alertText,

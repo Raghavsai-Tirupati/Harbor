@@ -3,7 +3,7 @@ import { MapPin, ChevronLeft, ChevronRight, Menu, ExternalLink, Loader2 } from '
 import { motion, AnimatePresence } from 'framer-motion';
 import { HeroVideoCarousel } from '@/components/HeroVideoCarousel';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { API_BASE } from '@/lib/api';
+import { fetchHeadlines } from '@/lib/api';
 
 type HeadlineArticle = {
   url: string;
@@ -35,15 +35,13 @@ export default function Home() {
   const [headlines, setHeadlines] = useState<HeadlineArticle[]>([]);
   const [headlinesLoading, setHeadlinesLoading] = useState(true);
 
-  // Fetch real headlines from GDELT via our API
+  // Fetch real headlines via EONET + Google News
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setHeadlinesLoading(true);
-        const res = await fetch(`${API_BASE}/headlines`);
-        if (!res.ok) throw new Error('Failed');
-        const data = await res.json();
+        const data = await fetchHeadlines();
         if (!cancelled) {
           setHeadlines(data.articles || []);
         }

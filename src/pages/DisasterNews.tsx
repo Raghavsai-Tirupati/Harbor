@@ -6,7 +6,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { API_BASE } from '@/lib/api';
+import { fetchAlerts as fetchAlertsAPI, fetchHeadlines as fetchHeadlinesAPI, searchLocation as searchLocationAPI } from '@/lib/api';
 
 /* ── Types ── */
 type Article = {
@@ -92,9 +92,7 @@ export default function DisasterNews() {
   const fetchAlerts = useCallback(async () => {
     try {
       setAlertsLoading(true);
-      const res = await fetch(`${API_BASE}/alerts`);
-      if (!res.ok) throw new Error('Failed');
-      const data = await res.json();
+      const data = await fetchAlertsAPI();
       // Deduplicate alerts by title
       const raw: AlertData[] = data.alerts || [];
       setAlerts(deduplicateByTitle(raw));
@@ -116,9 +114,7 @@ export default function DisasterNews() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/headlines`);
-        if (!res.ok) throw new Error('Failed');
-        const data = await res.json();
+        const data = await fetchHeadlinesAPI();
         if (!cancelled) setHeadlines(data.articles || []);
       } catch {
         if (!cancelled) setHeadlines([]);
@@ -151,10 +147,9 @@ export default function DisasterNews() {
     setSearchError('');
     setSearchResult(null);
     try {
-      const res = await fetch(`${API_BASE}/search-location?q=${encodeURIComponent(q)}`);
-      const data = await res.json();
-      if (!res.ok) {
-        setSearchError(data.error || 'Location not found');
+      const data = await searchLocationAPI(q);
+      if (data.error) {
+        setSearchError(data.error);
         return;
       }
       setSearchResult(data);
