@@ -1,302 +1,472 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
-import { MapPin, Newspaper, Filter } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  MapPin, Newspaper, AlertTriangle, ExternalLink, Loader2,
+  RefreshCw, Search, ChevronLeft, ChevronRight, X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 const API_BASE = '/api';
 
-const CATEGORY_WEIGHTS: Record<string, number> = {
-  severeStorms: 1.0,
-  volcanoes: 0.95,
-  floods: 0.9,
-  wildfires: 0.85,
-  landslides: 0.8,
-  seaLakeIce: 0.7,
-  earthquakes: 0.9,
-  droughts: 0.65,
-  snow: 0.6,
-  temperatureExtremes: 0.75,
-  other: 0.5,
+/* ── Types ── */
+type Article = {
+  url: string;
+  title: string;
+  source?: string;
+  publishedAt?: string | null;
+  image?: string | null;
+  disasterTitle?: string;
+  disasterCategory?: string;
+  disasterSeverity?: string;
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
-  severeStorms: 'Severe Storms',
-  wildfires: 'Wildfires',
-  volcanoes: 'Volcanoes',
-  earthquakes: 'Earthquakes',
-  floods: 'Floods',
-  landslides: 'Landslides',
-  droughts: 'Droughts',
-  seaLakeIce: 'Ice',
-  snow: 'Snow',
-  temperatureExtremes: 'Temperature',
-  other: 'Other',
-};
-
-type EventItem = {
+type AlertData = {
   id: string;
   title: string;
   category: string;
   categoryLabel: string;
+  alertText: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  urgencyScore: number;
   date: string;
   lat: number;
   lon: number;
-  magnitudeValue?: number;
-  sources: { url?: string }[];
-  urgencyScore: number;
-  urgencyBadge: 'High' | 'Medium' | 'Low';
-  articles?: { url: string; title: string; source?: string }[];
+  magnitudeValue?: number | null;
+  articles: Article[];
 };
 
-const DAYS_OPTIONS = [
-  { label: 'Last 24h', days: 1 },
-  { label: '3 days', days: 3 },
-  { label: '7 days', days: 7 },
-];
+type LocationDisaster = {
+  id: string;
+  title: string;
+  category: string;
+  categoryLabel: string;
+  severity: string;
+  date: string;
+  lat: number;
+  lon: number;
+  magnitudeValue?: number | null;
+  source: string;
+  distanceKm?: number | null;
+};
 
-function getCentroid(geom: { type: string; coordinates: number[] | number[][][] }): { lat: number; lon: number } {
-  if (geom.type === 'Point' && Array.isArray(geom.coordinates)) {
-    const [lon, lat] = geom.coordinates as number[];
-    return { lat, lon };
-  }
-  if (geom.type === 'Polygon' && Array.isArray(geom.coordinates) && geom.coordinates[0]) {
-    const ring = geom.coordinates[0] as [number, number][];
-    const lon = ring.reduce((s, [x]) => s + x, 0) / ring.length;
-    const lat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
-    return { lat, lon };
-  }
-  return { lat: 0, lon: 0 };
-}
+type LocationResult = {
+  location: { query: string; displayName: string; lat: number; lon: number } | null;
+  disasters: LocationDisaster[];
+  totalFound: number;
+};
 
-function computeUrgencyScore(
-  f: { properties?: { date?: string; closed?: string; magnitudeValue?: number; categories?: { id?: string }[] }; geometry?: unknown },
-  newsCount: number
-): number {
-  const props = f.properties || {};
-  const dateStr = props.date || props.closed || new Date().toISOString();
-  const ageHours = (Date.now() - new Date(dateStr).getTime()) / (1000 * 60 * 60);
-  const recency = Math.max(0, 1 - ageHours / (7 * 24));
-  const mag = props.magnitudeValue ?? 0;
-  const magNorm = Math.min(1, mag / 100);
-  const catId = props.categories?.[0]?.id || 'other';
-  const catWeight = CATEGORY_WEIGHTS[catId] ?? 0.5;
-  const newsNorm = Math.min(1, newsCount / 5);
-  return recency * 0.4 + magNorm * 0.2 + catWeight * 0.3 + newsNorm * 0.1;
-}
 
-function viewOnMap(event: EventItem) {
+/* ── Constants ── */
+const SEVERITY_BADGE_STYLES: Record<string, string> = {
+  critical: 'bg-red-500/15 text-red-600 border-red-500/30',
+  high: 'bg-amber-500/15 text-amber-600 border-amber-500/30',
+  medium: 'bg-yellow-500/15 text-yellow-600 border-yellow-500/30',
+  low: 'bg-slate-500/15 text-slate-600 border-slate-500/30',
+};
+
+/* ── Helpers ── */
+function viewOnMap(event: { id: string; title: string; lat: number; lon: number; [key: string]: unknown }) {
   sessionStorage.setItem('disasterMapFocus', JSON.stringify(event));
   window.location.href = '/map';
 }
 
-export default function DisasterNews() {
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [daysFilter, setDaysFilter] = useState(3);
-  const [loadingNewsFor, setLoadingNewsFor] = useState<Set<string>>(new Set());
-  const [eventsWithNews, setEventsWithNews] = useState<Map<string, EventItem>>(new Map());
+/* ── Deduplication by normalized title ── */
+function deduplicateByTitle<T extends { title: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const norm = item.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim().slice(0, 50);
+    if (seen.has(norm)) return false;
+    seen.add(norm);
+    return true;
+  });
+}
 
-  const fetchEvents = useCallback(async () => {
-    setLoading(true);
+/* ══════════════════════════════════════════════════════════════════
+   Component
+   ══════════════════════════════════════════════════════════════════ */
+export default function DisasterNews() {
+  /* ── Alerts ── */
+  const [alerts, setAlerts] = useState<AlertData[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(true);
+
+  const fetchAlerts = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/eonet-events?status=open&days=14`);
+      setAlertsLoading(true);
+      const res = await fetch(`${API_BASE}/alerts`);
+      if (!res.ok) throw new Error('Failed');
       const data = await res.json();
-      const features = (data.features || []) as Array<{
-        id?: string;
-        properties?: { id?: string; title?: string; date?: string; closed?: string; magnitudeValue?: number; categories?: { id?: string }[]; sources?: { url?: string }[] };
-        geometry?: { type: string; coordinates: number[] | number[][][] };
-      }>;
-      const items: EventItem[] = features.map((f) => {
-        const centroid = getCentroid(f.geometry || { type: 'Point', coordinates: [0, 0] });
-        const catId = f.properties?.categories?.[0]?.id || 'other';
-        return {
-          id: f.properties?.id || f.id || `evt-${Math.random()}`,
-          title: f.properties?.title || 'Event',
-          category: catId,
-          categoryLabel: CATEGORY_LABELS[catId] || catId,
-          date: f.properties?.date || f.properties?.closed || new Date().toISOString(),
-          lat: centroid.lat,
-          lon: centroid.lon,
-          magnitudeValue: f.properties?.magnitudeValue,
-          sources: f.properties?.sources || [],
-          urgencyScore: 0,
-          urgencyBadge: 'Medium' as const,
-        };
-      });
-      const withScores = items.map((e) => ({ ...e, urgencyScore: computeUrgencyScore(
-        { properties: { date: e.date, magnitudeValue: e.magnitudeValue, categories: [{ id: e.category }] } },
-        0
-      ) }));
-      withScores.sort((a, b) => b.urgencyScore - a.urgencyScore);
-      const sorted = withScores.map((e, i) => {
-        const pct = (i + 1) / withScores.length;
-        let badge: 'High' | 'Medium' | 'Low' = 'Medium';
-        if (pct <= 0.2) badge = 'High';
-        else if (pct > 0.7) badge = 'Low';
-        return { ...e, urgencyBadge: badge };
-      });
-      setEvents(sorted);
-      setEventsWithNews(new Map());
-    } catch (e) {
-      console.error(e);
-      setEvents([]);
+      // Deduplicate alerts by title
+      const raw: AlertData[] = data.alerts || [];
+      setAlerts(deduplicateByTitle(raw));
+    } catch {
+      setAlerts([]);
     } finally {
-      setLoading(false);
+      setAlertsLoading(false);
     }
   }, []);
 
+  useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
+
+  /* ── Headlines (for carousel + more articles) ── */
+  const [headlines, setHeadlines] = useState<Article[]>([]);
+  const [headlinesLoading, setHeadlinesLoading] = useState(true);
+  const [carouselIdx, setCarouselIdx] = useState(0);
+
   useEffect(() => {
-    fetchEvents();
-  }, [fetchEvents]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/headlines`);
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+        if (!cancelled) setHeadlines(data.articles || []);
+      } catch {
+        if (!cancelled) setHeadlines([]);
+      } finally {
+        if (!cancelled) setHeadlinesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-  const loadNewsFor = useCallback(async (event: EventItem) => {
-    if (eventsWithNews.has(event.id)) return;
-    setLoadingNewsFor((s) => new Set(s).add(event.id));
+  // Auto-advance carousel
+  useEffect(() => {
+    const top = headlines.slice(0, 6);
+    if (top.length <= 1) return;
+    const t = setInterval(() => setCarouselIdx((i) => (i + 1) % top.length), 5000);
+    return () => clearInterval(t);
+  }, [headlines]);
+
+  /* ── Location search ── */
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResult, setSearchResult] = useState<LocationResult | null>(null);
+  const [searchError, setSearchError] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSearch = useCallback(async () => {
+    const q = searchQuery.trim();
+    if (!q) return;
+    setSearchLoading(true);
+    setSearchError('');
+    setSearchResult(null);
     try {
-      const params = new URLSearchParams({
-        title: event.title,
-        lat: String(event.lat),
-        lon: String(event.lon),
-        days: String(daysFilter),
-        categoryId: event.category,
-      });
-      const res = await fetch(`${API_BASE}/event-news?${params}`);
+      const res = await fetch(`${API_BASE}/search-location?q=${encodeURIComponent(q)}`);
       const data = await res.json();
-      const articles = (data.articles || []).slice(0, 5);
-      setEventsWithNews((m) => new Map(m).set(event.id, { ...event, articles }));
+      if (!res.ok) {
+        setSearchError(data.error || 'Location not found');
+        return;
+      }
+      setSearchResult(data);
     } catch {
-      setEventsWithNews((m) => new Map(m).set(event.id, { ...event, articles: [] }));
+      setSearchError('Failed to search. Try again.');
     } finally {
-      setLoadingNewsFor((s) => {
-        const n = new Set(s);
-        n.delete(event.id);
-        return n;
-      });
+      setSearchLoading(false);
     }
-  }, [daysFilter]);
+  }, [searchQuery]);
 
-  const filtered = categoryFilter === 'all'
-    ? events
-    : events.filter((e) => e.category === categoryFilter);
-
-  const categories = ['all', ...new Set(events.map((e) => e.category))];
+  /* ── Carousel data ── */
+  const carouselItems = headlines.slice(0, 6);
+  const moreArticles = headlines.slice(6, 20);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-12">
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-12">
+      {/* Header */}
       <div className="mb-8">
-        <h1 className="font-heading text-3xl md:4xl font-bold">Natural Disaster News</h1>
+        <h1 className="font-heading text-3xl md:text-4xl font-bold">Natural Disaster News</h1>
         <p className="text-muted-foreground mt-2">
-          Active events sorted by urgency. Click an event to load related headlines.
+          Live alerts, breaking headlines, and location-based disaster search.
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-4 mb-8">
-        <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm text-muted-foreground">Time:</span>
-          {DAYS_OPTIONS.map((o) => (
-            <Button
-              key={o.days}
-              variant={daysFilter === o.days ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setDaysFilter(o.days)}
-            >
-              {o.label}
-            </Button>
-          ))}
+      {/* ═══ SECTION 1: Location Search Bar ═══ */}
+      <div className="mb-10">
+        <div className="flex items-center gap-2 mb-3">
+          <Search className="h-5 w-5 text-primary" />
+          <h2 className="font-heading text-lg font-semibold">Search Disasters by Location</h2>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">Category:</span>
-          <select
-            className="border rounded px-3 py-1.5 text-sm bg-background"
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c === 'all' ? 'All' : CATEGORY_LABELS[c] || c}
-              </option>
-            ))}
-          </select>
-        </div>
+        <form
+          onSubmit={(e) => { e.preventDefault(); handleSearch(); }}
+          className="flex gap-2"
+        >
+          <div className="relative flex-1">
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Enter a city, country, or region (e.g. Tokyo, California, Bangladesh)…"
+              className="w-full border rounded-lg px-4 py-3 pr-10 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => { setSearchQuery(''); setSearchResult(null); setSearchError(''); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <Button type="submit" disabled={searchLoading || !searchQuery.trim()}>
+            {searchLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            <span className="ml-1 hidden sm:inline">Search</span>
+          </Button>
+        </form>
+
+        {/* Search results */}
+        {searchError && (
+          <p className="text-sm text-red-500 mt-3">{searchError}</p>
+        )}
+        {searchResult && (
+          <div className="mt-4 border rounded-lg p-4 bg-card">
+            <div className="flex items-center gap-2 mb-3">
+              <MapPin className="h-4 w-4 text-primary" />
+              <span className="font-medium text-sm">{searchResult.location?.displayName}</span>
+              <Badge variant="outline" className="text-xs">
+                {searchResult.totalFound} disaster{searchResult.totalFound !== 1 ? 's' : ''} found
+              </Badge>
+            </div>
+            {searchResult.disasters.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No active disasters near this location. That's good news!</p>
+            ) : (
+              <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                {searchResult.disasters.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-start justify-between gap-3 p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm">{d.title}</span>
+                        <Badge variant="outline" className={cn("text-[10px] uppercase", SEVERITY_BADGE_STYLES[d.severity] || '')}>
+                          {d.severity}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {d.categoryLabel} · {d.source}
+                        {d.distanceKm != null && ` · ~${d.distanceKm} km away`}
+                        {d.magnitudeValue && ` · M${d.magnitudeValue}`}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {new Date(d.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </p>
+                    </div>
+                    <Button size="sm" variant="ghost" onClick={() => viewOnMap(d)}>
+                      <MapPin className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {loading ? (
-        <div className="text-muted-foreground py-12">Loading events…</div>
-      ) : filtered.length === 0 ? (
-        <div className="text-muted-foreground py-12">No active events found.</div>
-      ) : (
-        <div className="space-y-4">
-          {filtered.slice(0, 25).map((event) => {
-            const withNews = eventsWithNews.get(event.id);
-            const loadingNews = loadingNewsFor.has(event.id);
-            const hasLoaded = withNews !== undefined;
-            return (
+      <div className="border-t border-border mb-10" />
+
+      {/* ═══ SECTION 2: Live Disaster Alerts (deduplicated) ═══ */}
+      <div className="mb-10">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-red-500" />
+            <h2 className="font-heading text-lg font-semibold">Live Disaster Alerts</h2>
+            {!alertsLoading && alerts.length > 0 && (
+              <Badge variant="outline" className="text-xs">{alerts.length} active</Badge>
+            )}
+          </div>
+          <Button variant="ghost" size="sm" onClick={fetchAlerts} disabled={alertsLoading}>
+            <RefreshCw className={cn("h-4 w-4 mr-1", alertsLoading && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
+
+        {alertsLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground py-4">
+            <Loader2 className="h-4 w-4 animate-spin" /> Fetching live alerts…
+          </div>
+        ) : alerts.length === 0 ? (
+          <div className="text-muted-foreground text-sm py-4">No active alerts at this time.</div>
+        ) : (
+          <div className="space-y-3">
+            {alerts.map((alert) => (
               <div
-                key={event.id}
-                className="bg-card border border-border rounded-lg p-4 hover:border-primary/30 transition-colors"
+                key={alert.id}
+                className={cn(
+                  "rounded-lg border p-4 transition-colors",
+                  alert.severity === 'critical' && "border-red-500/40 bg-red-500/5",
+                  alert.severity === 'high' && "border-amber-500/40 bg-amber-500/5",
+                  alert.severity === 'medium' && "border-yellow-500/30 bg-yellow-500/5",
+                  alert.severity === 'low' && "border-border bg-card",
+                )}
               >
-                <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-semibold">{event.title}</h3>
+                      <h3 className="font-semibold text-sm">{alert.title}</h3>
                       <Badge
                         variant="outline"
-                        className={cn(
-                          event.urgencyBadge === 'High' && 'border-red-500 text-red-600',
-                          event.urgencyBadge === 'Medium' && 'border-amber-500 text-amber-600',
-                          event.urgencyBadge === 'Low' && 'border-slate-500 text-slate-600'
-                        )}
+                        className={cn("text-[10px] uppercase tracking-wider", SEVERITY_BADGE_STYLES[alert.severity])}
                       >
-                        {event.urgencyBadge}
+                        {alert.severity}
                       </Badge>
-                      <span className="text-xs text-muted-foreground">{event.categoryLabel}</span>
+                      <span className="text-xs text-muted-foreground">{alert.categoryLabel}</span>
                     </div>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Last updated: {new Date(event.date).toLocaleDateString()}
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {new Date(alert.date).toLocaleDateString(undefined, {
+                        weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                      })}
+                      {alert.magnitudeValue && ` · Magnitude ${alert.magnitudeValue}`}
                     </p>
-                    {!hasLoaded && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="mt-2"
-                        onClick={() => loadNewsFor(event)}
-                        disabled={loadingNews}
-                      >
-                        <Newspaper className="h-4 w-4 mr-1" />
-                        {loadingNews ? 'Fetching…' : 'Load headlines'}
-                      </Button>
-                    )}
-                    {withNews && (withNews.articles || []).length > 0 && (
-                      <div className="mt-3 space-y-1">
-                        <strong className="text-xs">Related headlines:</strong>
-                        {(withNews.articles || []).map((a, i) => (
+                    {alert.articles && alert.articles.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {alert.articles.slice(0, 3).map((article, i) => (
                           <a
                             key={i}
-                            href={a.url}
+                            href={article.url}
                             target="_blank"
-                            rel="noopener"
-                            className="block text-xs text-primary hover:underline truncate"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-xs text-primary hover:underline truncate group"
                           >
-                            {a.title?.slice(0, 80)}…
+                            <ExternalLink className="h-3 w-3 shrink-0 opacity-50 group-hover:opacity-100" />
+                            <span className="truncate">{article.title?.slice(0, 100)}</span>
+                            {article.source && <span className="text-muted-foreground shrink-0">— {article.source}</span>}
                           </a>
                         ))}
                       </div>
                     )}
                   </div>
-                  <Button size="sm" onClick={() => viewOnMap(event)}>
-                    <MapPin className="h-4 w-4 mr-1" />
-                    View on Map
+                  <Button size="sm" variant="outline" onClick={() => viewOnMap({
+                    id: alert.id, title: alert.title, category: alert.category,
+                    categoryLabel: alert.categoryLabel, date: alert.date,
+                    lat: alert.lat, lon: alert.lon, urgencyScore: alert.urgencyScore,
+                    urgencyBadge: alert.severity === 'critical' || alert.severity === 'high' ? 'High' : alert.severity === 'medium' ? 'Medium' : 'Low',
+                    sources: [],
+                  })}>
+                    <MapPin className="h-3 w-3 mr-1" /> Map
                   </Button>
                 </div>
               </div>
-            );
-          })}
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-border mb-10" />
+
+      {/* ═══ SECTION 3: Headlines Carousel ═══ */}
+      <div className="mb-10">
+        <div className="flex items-center gap-2 mb-4">
+          <Newspaper className="h-5 w-5 text-primary" />
+          <h2 className="font-heading text-lg font-semibold">Breaking Headlines</h2>
+        </div>
+
+        {headlinesLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground py-8">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading headlines…
+          </div>
+        ) : carouselItems.length === 0 ? (
+          <p className="text-muted-foreground text-sm py-4">No headlines available.</p>
+        ) : (
+          <div>
+            {/* Main carousel card */}
+            <div className="relative overflow-hidden rounded-lg border bg-card min-h-[180px]">
+              {carouselItems.map((item, i) => (
+                <a
+                  key={i}
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(
+                    "absolute inset-0 p-6 flex flex-col justify-end transition-all duration-500",
+                    i === carouselIdx ? "opacity-100 translate-x-0" : "opacity-0 translate-x-full pointer-events-none",
+                  )}
+                >
+                  {item.disasterCategory && (
+                    <span className="text-[10px] tracking-[0.15em] uppercase text-red-500/80 mb-0.5">
+                      {item.disasterCategory}{item.disasterTitle ? ` — ${item.disasterTitle}` : ''}
+                    </span>
+                  )}
+                  <span className="text-[10px] tracking-[0.15em] uppercase text-muted-foreground mb-1">
+                    {item.source}
+                    {item.publishedAt && ` · ${new Date(item.publishedAt).toLocaleDateString()}`}
+                  </span>
+                  <h3 className="font-heading text-xl font-semibold leading-snug line-clamp-3 hover:text-primary transition-colors">
+                    {item.title}
+                  </h3>
+                  <span className="text-xs text-primary flex items-center gap-1 mt-2">
+                    <ExternalLink className="h-3 w-3" /> Read full article
+                  </span>
+                </a>
+              ))}
+            </div>
+
+            {/* Carousel controls */}
+            <div className="flex items-center justify-center gap-3 mt-3">
+              <button
+                onClick={() => setCarouselIdx((i) => (i - 1 + carouselItems.length) % carouselItems.length)}
+                className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <div className="flex gap-1.5">
+                {carouselItems.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setCarouselIdx(i)}
+                    className={cn("w-2 h-2 rounded-full transition-colors", i === carouselIdx ? "bg-primary" : "bg-muted-foreground/30")}
+                  />
+                ))}
+              </div>
+              <button
+                onClick={() => setCarouselIdx((i) => (i + 1) % carouselItems.length)}
+                className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ═══ SECTION 4: More Articles (smaller cards) ═══ */}
+      {moreArticles.length > 0 && (
+        <div className="mb-10">
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            More Headlines
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {moreArticles.map((article, i) => (
+              <a
+                key={i}
+                href={article.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group block border rounded-md p-3 bg-card hover:border-primary/30 transition-colors"
+              >
+                {article.disasterCategory && (
+                  <span className="text-[10px] tracking-[0.1em] uppercase text-red-500/70 block mb-0.5">
+                    {article.disasterCategory}
+                  </span>
+                )}
+                <span className="text-[10px] tracking-[0.1em] uppercase text-muted-foreground block mb-1">
+                  {article.source}
+                </span>
+                <h4 className="text-xs font-medium leading-snug line-clamp-3 group-hover:text-primary transition-colors">
+                  {article.title}
+                </h4>
+                {article.publishedAt && (
+                  <span className="text-[10px] text-muted-foreground/60 mt-1.5 block">
+                    {new Date(article.publishedAt).toLocaleDateString()}
+                  </span>
+                )}
+              </a>
+            ))}
+          </div>
         </div>
       )}
+
     </div>
   );
 }

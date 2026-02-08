@@ -108,3 +108,47 @@ export async function fetchEventNews({ title, lat, lon, days = 3, categoryId = '
   }
   return publicArticles;
 }
+
+/**
+ * Fast variant — returns GDELT articles without paywall checking.
+ * Used for headline feeds where speed matters more than filtering.
+ */
+export async function fetchEventNewsFast({ title, lat, lon, days = 7, categoryId = 'other' }) {
+  // Use just the title as a simpler query for better GDELT results
+  const safeTitle = (title || '').replace(/[()"'\\]/g, ' ').trim().slice(0, 80);
+  const query = safeTitle ? encodeURIComponent(`"${safeTitle}"`) : encodeURIComponent('disaster');
+  const span = timespanToGdelt(days);
+  const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${query} sourcelang:english&mode=artlist&maxrecords=8&timespan=${span}&format=json&sort=DateDesc`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('GDELT request failed');
+
+  // GDELT sometimes returns text errors instead of JSON
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // If title query fails, try with category keywords instead
+    const keywords = CATEGORY_KEYWORDS[categoryId] || '';
+    if (!keywords) return [];
+    const fallbackQuery = encodeURIComponent(keywords);
+    const fallbackUrl = `https://api.gdeltproject.org/api/v2/doc/doc?query=${fallbackQuery} sourcelang:english&mode=artlist&maxrecords=8&timespan=${span}&format=json&sort=DateDesc`;
+    const fallbackRes = await fetch(fallbackUrl);
+    const fallbackText = await fallbackRes.text();
+    try {
+      data = JSON.parse(fallbackText);
+    } catch {
+      return [];
+    }
+  }
+
+  const articles = Array.isArray(data) ? data : data.articles || data.results || [];
+
+  return articles.slice(0, 8).map((a) => ({
+    url: a.url || a.articleUrl,
+    title: (a.title || a.article || 'Untitled').trim(),
+    source: a.domain || a.source || '',
+    publishedAt: a.seendate || a.date || null,
+  })).filter((a) => a.url);
+}
