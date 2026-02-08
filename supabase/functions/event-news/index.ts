@@ -180,9 +180,10 @@ serve(async (req) => {
     });
   } catch (error) {
     console.error('Event news error:', error);
+    // Return 200 with empty articles to avoid triggering frontend errors
     return new Response(
-      JSON.stringify({ error: 'Failed to fetch news', articles: [] }),
-      { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({ articles: [] }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
