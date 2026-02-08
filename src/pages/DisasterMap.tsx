@@ -3,6 +3,13 @@ import { useJsApiLoader, GoogleMap } from '@react-google-maps/api';
 import { cn } from '@/lib/utils';
 import { fetchEonet, fetchEarthquakes, fetchEventNews } from '@/lib/disasterApi';
 import { GOOGLE_MAPS_API_KEY } from '@/config/maps';
+import MapChatbot from '@/components/disaster/MapChatbot';
+
+type MapClickContext = {
+  lat: number;
+  lng: number;
+  nearbyEvents?: { title: string; category: string }[];
+} | null;
 
 const mapContainerStyle = {
   width: '100%',
@@ -359,6 +366,9 @@ export default function DisasterMap() {
   const overlaysRef = useRef<OverlayObject[]>([]);
   const fetchInProgressRef = useRef(false);
   const focusEventRef = useRef<FocusEvent | null>(null);
+  const [chatContext, setChatContext] = useState<MapClickContext>(null);
+  const geoDataRef = useRef<{ features?: EONETFeature[] | PredictionFeature[] } | null>(null);
+  const [activeEvents, setActiveEvents] = useState<{ title: string; category: string; lat: number; lng: number }[]>([]);
 
   useEffect(() => {
     try {
@@ -398,7 +408,29 @@ export default function DisasterMap() {
       const focus = focusEventRef.current;
       if (focus) focusEventRef.current = null;
       fetchEonet({ bbox: worldBbox, status: 'open', days: '14' })
-        .then((geojson) => addOverlay(map, geojson, overlaysRef, false, focus))
+        .then((geojson) => {
+          geoDataRef.current = geojson;
+          // Extract events for chatbot context
+          const evts: { title: string; category: string; lat: number; lng: number }[] = [];
+          for (const f of geojson.features || []) {
+            const ef = f as EONETFeature;
+            const title = ef.properties?.title || 'Event';
+            const catId = ef.properties?.categories?.[0]?.id || 'other';
+            const cat = CATEGORY_LABELS[catId] || catId;
+            let lat = 0, lng = 0;
+            if (ef.geometry?.type === 'Point' && ef.geometry.coordinates) {
+              const [ln, lt] = ef.geometry.coordinates as number[];
+              lat = lt; lng = ln;
+            } else if (ef.geometry?.type === 'Polygon' && ef.geometry.coordinates) {
+              const ring = ef.geometry.coordinates[0] as [number, number][];
+              lng = ring.reduce((s, [x]) => s + x, 0) / ring.length;
+              lat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
+            }
+            if (lat || lng) evts.push({ title, category: cat, lat, lng });
+          }
+          setActiveEvents(evts);
+          addOverlay(map, geojson, overlaysRef, false, focus);
+        })
         .catch((e) => console.error('EONET overlay error:', e))
         .finally(done);
     } else {
@@ -447,12 +479,64 @@ export default function DisasterMap() {
     fetchData();
   }, [mapMode, seasonFilter, fetchData]);
 
+  const findNearbyEvents = useCallback((lat: number, lng: number, radiusDeg = 5): { title: string; category: string }[] => {
+    const features = geoDataRef.current?.features || [];
+    const nearby: { title: string; category: string }[] = [];
+    for (const f of features) {
+      const props = f.properties || {};
+      let eLat = 0;
+      let eLng = 0;
+      const geom = (f as EONETFeature).geometry;
+      if (geom?.type === 'Point' && geom.coordinates) {
+        const [ln, lt] = geom.coordinates as number[];
+        eLat = lt;
+        eLng = ln;
+      } else if (geom?.type === 'Polygon' && geom.coordinates) {
+        const ring = geom.coordinates[0] as [number, number][];
+        eLng = ring.reduce((s, [x]) => s + x, 0) / ring.length;
+        eLat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
+      } else if ('categoryId' in props) {
+        const pf = f as PredictionFeature;
+        const [ln, lt] = pf.geometry.coordinates;
+        eLat = lt;
+        eLng = ln;
+      } else {
+        continue;
+      }
+      const dist = Math.sqrt((eLat - lat) ** 2 + (eLng - lng) ** 2);
+      if (dist <= radiusDeg) {
+        const title = ('title' in props ? props.title : `Predicted ${'categoryLabel' in props ? props.categoryLabel : 'event'}`) || 'Event';
+        const category = ('categories' in props && Array.isArray(props.categories))
+          ? (CATEGORY_LABELS[props.categories[0]?.id || ''] || props.categories[0]?.id || 'Other')
+          : ('categoryLabel' in props ? props.categoryLabel : 'Other');
+        nearby.push({ title, category });
+      }
+    }
+    return nearby.slice(0, 10);
+  }, []);
+
+  const handleChatMapAction = useCallback((action: { lat: number; lng: number; zoom: number }) => {
+    const map = mapRef.current;
+    if (!map) return;
+    map.panTo({ lat: action.lat, lng: action.lng });
+    map.setZoom(action.zoom);
+  }, []);
+
+  const handleMapClick = useCallback(
+    (e: google.maps.MapMouseEvent) => {
+      if (!e.latLng) return;
+      const lat = e.latLng.lat();
+      const lng = e.latLng.lng();
+      const nearbyEvents = findNearbyEvents(lat, lng);
+      setChatContext({ lat, lng, nearbyEvents });
+    },
+    [findNearbyEvents]
+  );
+
   const onMapLoad = useCallback(
     (map: google.maps.Map) => {
       mapRef.current = map;
-      // Fetch once on load — no refetch on pan/zoom so markers stay consistent
       setTimeout(fetchData, 500);
-      // Hide country names until zoomed in
       const updateLabelVisibility = () => {
         const zoom = map.getZoom() ?? 0;
         const hideLabels = zoom < ZOOM_SHOW_COUNTRY_LABELS;
@@ -548,6 +632,7 @@ export default function DisasterMap() {
           zoom={2}
           onLoad={onMapLoad}
           onUnmount={onMapUnmount}
+          onClick={handleMapClick}
           options={{
             zoomControl: true,
             mapTypeControl: true,
@@ -559,7 +644,9 @@ export default function DisasterMap() {
           }}
         />
       </div>
-      <div className="w-1/4 h-full flex-shrink-0 bg-background" />
+      <div className="w-1/4 h-full flex-shrink-0">
+        <MapChatbot mapContext={chatContext} onClearContext={() => setChatContext(null)} onMapAction={handleChatMapAction} activeEvents={activeEvents} />
+      </div>
     </div>
   );
 }
