@@ -171,7 +171,7 @@ export default function DisasterNews() {
 
   return (
     <div className="min-h-screen relative" style={{ backgroundImage: `url(${newsBg})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundAttachment: 'fixed' }}>
-      <div className="absolute inset-0 bg-black/60" />
+      <div className="absolute inset-0 bg-black/75" />
       <div className="relative max-w-5xl mx-auto px-4 sm:px-6 py-6">
       <PageHeader
         title="Natural Disaster News"
