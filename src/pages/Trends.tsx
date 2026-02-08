@@ -42,28 +42,28 @@ export default function Trends() {
       {/* Charts Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
         {/* Bar chart */}
-        <div className="bg-card rounded-2xl border border-border p-6">
+        <div className="bg-card border border-border p-6">
           <h3 className="font-heading font-semibold mb-6">Most Frequent Disaster Types (2025)</h3>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={barData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="name" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
               <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-              <Tooltip contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0.75rem', fontSize: 13 }} />
-              <Bar dataKey="count" radius={[6, 6, 0, 0]} fill="var(--primary)" />
+              <Tooltip contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0', fontSize: 13 }} />
+              <Bar dataKey="count" radius={[0, 0, 0, 0]} fill="var(--primary)" />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
         {/* Line chart */}
-        <div className="bg-card rounded-2xl border border-border p-6">
+        <div className="bg-card border border-border p-6">
           <h3 className="font-heading font-semibold mb-6">Event Trends Over Time</h3>
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={lineData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="year" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
               <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-              <Tooltip contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0.75rem', fontSize: 13 }} />
+              <Tooltip contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0', fontSize: 13 }} />
               <Line type="monotone" dataKey="earthquakes" stroke="hsl(0, 72%, 51%)" strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="floods" stroke="hsl(217, 91%, 60%)" strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="wildfires" stroke="hsl(38, 92%, 50%)" strokeWidth={2} dot={false} />
@@ -72,14 +72,14 @@ export default function Trends() {
         </div>
 
         {/* Seasonal area chart */}
-        <div className="bg-card rounded-2xl border border-border p-6 lg:col-span-2">
+        <div className="bg-card border border-border p-6 lg:col-span-2">
           <h3 className="font-heading font-semibold mb-6">Seasonal Disaster Patterns (Monthly Events)</h3>
           <ResponsiveContainer width="100%" height={250}>
             <AreaChart data={monthlyData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
               <XAxis dataKey="month" tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
               <YAxis tick={{ fontSize: 12 }} stroke="var(--muted-foreground)" />
-              <Tooltip contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0.75rem', fontSize: 13 }} />
+              <Tooltip contentStyle={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '0', fontSize: 13 }} />
               <Area type="monotone" dataKey="events" stroke="var(--primary)" fill="var(--primary)" fillOpacity={0.15} strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
@@ -89,8 +89,8 @@ export default function Trends() {
       {/* Insight cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {insights.map((ins) => (
-          <div key={ins.title} className="bg-card rounded-2xl border border-border p-6">
-            <div className={`inline-flex items-center justify-center w-10 h-10 rounded-xl ${ins.bg} mb-4`}>
+          <div key={ins.title} className="bg-card border border-border p-6">
+            <div className={`inline-flex items-center justify-center w-10 h-10 ${ins.bg} mb-4`}>
               <ins.icon className={`h-5 w-5 ${ins.color}`} />
             </div>
             <h3 className="font-heading font-semibold mb-2">{ins.title}</h3>

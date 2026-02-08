@@ -6,9 +6,9 @@ export default function About() {
       <h1 className="font-heading text-3xl md:text-4xl font-bold mb-8">About & Disclaimer</h1>
 
       <div className="space-y-8">
-        <div className="bg-card rounded-2xl border border-border p-8">
+        <div className="bg-card border border-border p-8">
           <div className="flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl bg-disaster-blue/10 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 bg-disaster-blue/10 flex items-center justify-center shrink-0">
               <Database className="h-5 w-5 text-disaster-blue" />
             </div>
             <div>
@@ -20,9 +20,9 @@ export default function About() {
           </div>
         </div>
 
-        <div className="bg-card rounded-2xl border border-border p-8">
+        <div className="bg-card border border-border p-8">
           <div className="flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl bg-disaster-red/10 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 bg-disaster-red/10 flex items-center justify-center shrink-0">
               <AlertTriangle className="h-5 w-5 text-disaster-red" />
             </div>
             <div>
@@ -34,9 +34,9 @@ export default function About() {
           </div>
         </div>
 
-        <div className="bg-card rounded-2xl border border-border p-8">
+        <div className="bg-card border border-border p-8">
           <div className="flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl bg-disaster-green/10 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 bg-disaster-green/10 flex items-center justify-center shrink-0">
               <ShieldAlert className="h-5 w-5 text-disaster-green" />
             </div>
             <div>
@@ -49,13 +49,13 @@ export default function About() {
         </div>
 
         {/* Partner logos placeholder */}
-        <div className="bg-card rounded-2xl border border-border p-8 text-center">
+        <div className="bg-card border border-border p-8 text-center">
           <h3 className="font-heading font-semibold mb-6">Ecosystem Partners</h3>
           <div className="flex flex-wrap items-center justify-center gap-8 text-muted-foreground text-sm font-medium">
-            <span className="px-4 py-2 rounded-lg bg-muted">🏥 Red Cross</span>
-            <span className="px-4 py-2 rounded-lg bg-muted">🌾 World Food Programme</span>
-            <span className="px-4 py-2 rounded-lg bg-muted">🦄 UNICEF</span>
-            <span className="px-4 py-2 rounded-lg bg-muted">🌍 Local NGOs</span>
+            <span className="px-4 py-2 bg-muted">🏥 Red Cross</span>
+            <span className="px-4 py-2 bg-muted">🌾 World Food Programme</span>
+            <span className="px-4 py-2 bg-muted">🦄 UNICEF</span>
+            <span className="px-4 py-2 bg-muted">🌍 Local NGOs</span>
           </div>
         </div>
       </div>
