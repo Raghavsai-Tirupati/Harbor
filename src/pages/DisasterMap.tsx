@@ -1,8 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useJsApiLoader, GoogleMap } from '@react-google-maps/api';
 import { cn } from '@/lib/utils';
-
-const API_BASE = '/api';
+import { fetchEonet, fetchEarthquakes, fetchEventNews } from '@/lib/disasterApi';
 
 const mapContainerStyle = {
   width: '100%',
@@ -240,15 +239,13 @@ function addOverlay(
       return;
     }
 
-    const params = new URLSearchParams({
+    fetchEventNews({
       title: title || 'disaster',
-      lat: String(lat),
-      lon: String(lon),
-      days: '3',
+      lat,
+      lon,
+      days: 3,
       categoryId: categoryId || 'other',
-    });
-    fetch(`${API_BASE}/event-news?${params}`)
-      .then((r) => r.json())
+    })
       .then((data) => {
         const arts = data.articles || [];
         if (arts.length === 0) {
@@ -400,8 +397,7 @@ export default function DisasterMap() {
       const worldBbox = '-180,85,180,-85';
       const focus = focusEventRef.current;
       if (focus) focusEventRef.current = null;
-      fetch(`${API_BASE}/eonet?bbox=${encodeURIComponent(worldBbox)}&status=open&days=14`)
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('EONET failed'))))
+      fetchEonet({ bbox: worldBbox, status: 'open', days: '14' })
         .then((geojson) => addOverlay(map, geojson, overlaysRef, false, focus))
         .catch((e) => console.error('EONET overlay error:', e))
         .finally(done);
@@ -413,14 +409,10 @@ export default function DisasterMap() {
       for (let y = 0; y < PREDICTION_YEARS; y++) {
         const { start, end } = getSeasonDateRange(seasonFilter, y);
         eonetReqs.push(
-          fetch(
-            `${API_BASE}/eonet?bbox=${encodeURIComponent(worldBbox)}&status=closed&start=${start}&end=${end}`
-          ).then((r) => r.json())
+          fetchEonet({ bbox: worldBbox, status: 'closed', start, end })
         );
         usgsReqs.push(
-          fetch(
-            `${API_BASE}/earthquakes?bbox=${encodeURIComponent(worldBbox)}&start=${start}&end=${end}`
-          ).then((r) => r.json())
+          fetchEarthquakes({ bbox: worldBbox, start, end })
         );
       }
       Promise.all([...eonetReqs, ...usgsReqs])
