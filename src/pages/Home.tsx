@@ -16,7 +16,8 @@ const HEADLINES = [
 const SIDEBAR_LINKS = [
   { to: '/', label: 'Home' },
   { to: '/map', label: 'Disaster Map' },
-  { to: '/trends', label: 'News' },
+  { to: '/news', label: 'Disaster News' },
+  { to: '/trends', label: 'Trends' },
   { to: '/resources', label: 'Aid Resources' },
   { to: '/about', label: 'Our Mission' },
 ];

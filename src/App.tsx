@@ -3,6 +3,7 @@ import { Navbar } from './components/disaster/Navbar';
 import { Footer } from './components/disaster/Footer';
 import Home from './pages/Home';
 import DisasterMap from './pages/DisasterMap';
+import DisasterNews from './pages/DisasterNews';
 import Trends from './pages/Trends';
 import AidResources from './pages/AidResources';
 import About from './pages/About';
@@ -16,6 +17,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/map" element={<DisasterMap />} />
+          <Route path="/news" element={<DisasterNews />} />
           <Route path="/trends" element={<Trends />} />
           <Route path="/resources" element={<AidResources />} />
           <Route path="/about" element={<About />} />
