@@ -1,22 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { useJsApiLoader, GoogleMap } from '@react-google-maps/api';
+import mapboxgl from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
 import { cn } from '@/lib/utils';
 import { fetchEonet, fetchEarthquakes, fetchEventNews } from '@/lib/disasterApi';
-import { GOOGLE_MAPS_API_KEY } from '@/config/maps';
-import MapChatbot from '@/components/disaster/MapChatbot';
+import ChatPanel, { type MapContext, type ToolCommand, type EventSummary } from '@/components/disaster/ChatPanel';
 
-type MapClickContext = {
-  lat: number;
-  lng: number;
-  nearbyEvents?: { title: string; category: string }[];
-} | null;
-
-const mapContainerStyle = {
-  width: '100%',
-  height: '100%',
-};
-
-const defaultCenter = { lat: 20, lng: 0 };
+/* ── Season / prediction constants ────────────────────────────────────── */
 
 const SEASON_MONTHS: Record<string, number[]> = {
   Spring: [3, 4, 5],
@@ -25,26 +14,11 @@ const SEASON_MONTHS: Record<string, number[]> = {
   Winter: [12, 1, 2],
 };
 
-const ZOOM_SHOW_COUNTRY_LABELS = 5; // Show country names when zoomed in to this level or higher
-
-const BASE_MAP_STYLES: google.maps.MapTypeStyle[] = [
-  { featureType: 'all', elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#304a7d' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
-  { featureType: 'administrative.country', elementType: 'geometry.stroke', stylers: [{ color: '#3d4f5c' }, { weight: 0.5 }] },
-];
-const HIDE_COUNTRY_LABELS_STYLE: google.maps.MapTypeStyle = {
-  featureType: 'administrative.country',
-  elementType: 'labels',
-  stylers: [{ visibility: 'off' }],
-};
-
 function monthInSeason(month: number, season: string): boolean {
   return (SEASON_MONTHS[season] || []).includes(month);
 }
 
-function getSeasonDateRange(season: string, yearOffset = 0): { start: string; end: string } {
+function getSeasonDateRange(season: string, yearOffset = 0) {
   const y = new Date().getFullYear() - yearOffset;
   const months = SEASON_MONTHS[season];
   if (!months) return { start: `${y}-01-01`, end: `${y}-12-31` };
@@ -56,105 +30,11 @@ function getSeasonDateRange(season: string, yearOffset = 0): { start: string; en
   };
 }
 
-const GRID_SIZE = 2; // degrees - cluster events within ~2° cells
+const GRID_SIZE = 2;
 const MIN_EVENTS_FOR_PREDICTION = 2;
 const PREDICTION_YEARS = 5;
 
-function buildPredictionFeatures(
-  eonetFeatures: EONETFeature[],
-  usgsFeatures: { geometry?: { coordinates?: number[] }; properties?: { mag?: number; place?: string } }[],
-  season: string
-): PredictionFeature[] {
-  type Cluster = { lats: number[]; lngs: number[]; count: number };
-  const clusters = new Map<string, Cluster>();
-
-  const addPoint = (lat: number, lng: number, catId: string) => {
-    const gLat = Math.floor(lat / GRID_SIZE) * GRID_SIZE;
-    const gLng = Math.floor(lng / GRID_SIZE) * GRID_SIZE;
-    const key = `${catId}|${gLat}|${gLng}`;
-    const c = clusters.get(key);
-    if (c) {
-      c.lats.push(lat);
-      c.lngs.push(lng);
-      c.count++;
-    } else {
-      clusters.set(key, { lats: [lat], lngs: [lng], count: 1 });
-    }
-  };
-
-  for (const f of eonetFeatures) {
-    const catId = f.properties?.categories?.[0]?.id || 'other';
-    if (f.geometry?.type === 'Point' && f.geometry.coordinates) {
-      const [lng, lat] = f.geometry.coordinates as number[];
-      addPoint(lat, lng, catId);
-    } else if (f.geometry?.type === 'Polygon' && f.geometry.coordinates) {
-      const ring = f.geometry.coordinates[0] as [number, number][];
-      const centerLng = ring.reduce((s, [x]) => s + x, 0) / ring.length;
-      const centerLat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
-      addPoint(centerLat, centerLng, catId);
-    }
-  }
-  for (const f of usgsFeatures) {
-    const coords = f.geometry?.coordinates;
-    if (coords && coords.length >= 2) {
-      const [lng, lat] = coords;
-      addPoint(lat, lng, 'earthquakes');
-    }
-  }
-
-  const yearEnd = new Date().getFullYear();
-  const yearStart = yearEnd - PREDICTION_YEARS + 1;
-  const yearRange = `${yearStart}–${yearEnd}`;
-  const predictions: PredictionFeature[] = [];
-
-  clusters.forEach((c, key) => {
-    if (c.count < MIN_EVENTS_FOR_PREDICTION) return;
-    const [catId] = key.split('|');
-    const avgLat = c.lats.reduce((a, b) => a + b, 0) / c.lats.length;
-    const avgLng = c.lngs.reduce((a, b) => a + b, 0) / c.lngs.length;
-    const label = CATEGORY_LABELS[catId] || catId;
-    predictions.push({
-      geometry: { type: 'Point', coordinates: [avgLng, avgLat] },
-      properties: {
-        categoryId: catId,
-        categoryLabel: label,
-        season,
-        count: c.count,
-        yearRange,
-      },
-    });
-  });
-  return predictions;
-}
-
-// EONET category IDs → color (fill, stroke)
-const DISASTER_COLORS: Record<string, { fill: string; stroke: string }> = {
-  severeStorms: { fill: '#0ea5e9', stroke: '#0284c7' },
-  wildfires: { fill: '#ef4444', stroke: '#b91c1c' },
-  volcanoes: { fill: '#7c3aed', stroke: '#5b21b6' },
-  earthquakes: { fill: '#f59e0b', stroke: '#d97706' },
-  droughts: { fill: '#d97706', stroke: '#b45309' },
-  floods: { fill: '#06b6d4', stroke: '#0891b2' },
-  landslides: { fill: '#78716c', stroke: '#57534e' },
-  seaLakeIce: { fill: '#22d3ee', stroke: '#06b6d4' },
-  snow: { fill: '#e0e7ff', stroke: '#a5b4fc' },
-  temperatureExtremes: { fill: '#f97316', stroke: '#ea580c' },
-};
-const DEFAULT_COLOR = { fill: '#64748b', stroke: '#475569' };
-
-const CATEGORY_LABELS: Record<string, string> = {
-  severeStorms: 'Severe Storms',
-  wildfires: 'Wildfires',
-  volcanoes: 'Volcanoes',
-  earthquakes: 'Earthquakes',
-  droughts: 'Droughts',
-  floods: 'Floods',
-  landslides: 'Landslides',
-  seaLakeIce: 'Ice / Sea Ice',
-  snow: 'Snow',
-  temperatureExtremes: 'Temperature Extremes',
-  other: 'Other',
-};
+/* ── Types ────────────────────────────────────────────────────────────── */
 
 type EONETFeature = {
   geometry?: { type: string; coordinates: number[] | number[][][] };
@@ -177,210 +57,221 @@ type PredictionFeature = {
   };
 };
 
-type OverlayObject = google.maps.Marker | google.maps.Polygon | google.maps.InfoWindow;
+/* ── Disaster category colours ────────────────────────────────────────── */
 
-function getCategoryColor(categoryId: string | undefined, isPrediction: boolean) {
-  const c = categoryId ? DISASTER_COLORS[categoryId] : null;
-  return c || DEFAULT_COLOR;
+const DISASTER_COLORS: Record<string, { fill: string; stroke: string }> = {
+  severeStorms: { fill: '#0ea5e9', stroke: '#0284c7' },
+  wildfires: { fill: '#ef4444', stroke: '#b91c1c' },
+  volcanoes: { fill: '#7c3aed', stroke: '#5b21b6' },
+  earthquakes: { fill: '#f59e0b', stroke: '#d97706' },
+  droughts: { fill: '#d97706', stroke: '#b45309' },
+  floods: { fill: '#06b6d4', stroke: '#0891b2' },
+  landslides: { fill: '#78716c', stroke: '#57534e' },
+  seaLakeIce: { fill: '#22d3ee', stroke: '#06b6d4' },
+  snow: { fill: '#e0e7ff', stroke: '#a5b4fc' },
+  temperatureExtremes: { fill: '#f97316', stroke: '#ea580c' },
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  severeStorms: 'Severe Storms',
+  wildfires: 'Wildfires',
+  volcanoes: 'Volcanoes',
+  earthquakes: 'Earthquakes',
+  droughts: 'Droughts',
+  floods: 'Floods',
+  landslides: 'Landslides',
+  seaLakeIce: 'Ice / Sea Ice',
+  snow: 'Snow',
+  temperatureExtremes: 'Temperature Extremes',
+  other: 'Other',
+};
+
+/* Mapbox data-driven style expressions for category colours */
+function buildColorMatch(key: 'fill' | 'stroke') {
+  const pairs: (string | string[])[] = ['match', ['get', 'categoryId']];
+  for (const [cat, c] of Object.entries(DISASTER_COLORS)) {
+    pairs.push(cat, c[key]);
+  }
+  pairs.push(key === 'fill' ? '#64748b' : '#475569'); // fallback
+  return pairs as unknown as mapboxgl.ExpressionSpecification;
 }
+const FILL_EXPR = buildColorMatch('fill');
+const STROKE_EXPR = buildColorMatch('stroke');
+
+/* ── Prediction builder (unchanged logic) ─────────────────────────────── */
+
+function buildPredictionFeatures(
+  eonetFeatures: EONETFeature[],
+  usgsFeatures: { geometry?: { coordinates?: number[] }; properties?: { mag?: number; place?: string } }[],
+  season: string,
+): PredictionFeature[] {
+  type Cluster = { lats: number[]; lngs: number[]; count: number };
+  const clusters = new Map<string, Cluster>();
+
+  const addPoint = (lat: number, lng: number, catId: string) => {
+    const gLat = Math.floor(lat / GRID_SIZE) * GRID_SIZE;
+    const gLng = Math.floor(lng / GRID_SIZE) * GRID_SIZE;
+    const key = `${catId}|${gLat}|${gLng}`;
+    const c = clusters.get(key);
+    if (c) { c.lats.push(lat); c.lngs.push(lng); c.count++; }
+    else clusters.set(key, { lats: [lat], lngs: [lng], count: 1 });
+  };
+
+  for (const f of eonetFeatures) {
+    const catId = f.properties?.categories?.[0]?.id || 'other';
+    if (f.geometry?.type === 'Point' && f.geometry.coordinates) {
+      const [lng, lat] = f.geometry.coordinates as number[];
+      addPoint(lat, lng, catId);
+    } else if (f.geometry?.type === 'Polygon' && f.geometry.coordinates) {
+      const ring = f.geometry.coordinates[0] as [number, number][];
+      const cLng = ring.reduce((s, [x]) => s + x, 0) / ring.length;
+      const cLat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
+      addPoint(cLat, cLng, catId);
+    }
+  }
+  for (const f of usgsFeatures) {
+    const coords = f.geometry?.coordinates;
+    if (coords && coords.length >= 2) addPoint(coords[1], coords[0], 'earthquakes');
+  }
+
+  const yearEnd = new Date().getFullYear();
+  const yearStart = yearEnd - PREDICTION_YEARS + 1;
+  const yearRange = `${yearStart}\u2013${yearEnd}`;
+  const predictions: PredictionFeature[] = [];
+
+  clusters.forEach((c, key) => {
+    if (c.count < MIN_EVENTS_FOR_PREDICTION) return;
+    const [catId] = key.split('|');
+    const avgLat = c.lats.reduce((a, b) => a + b, 0) / c.lats.length;
+    const avgLng = c.lngs.reduce((a, b) => a + b, 0) / c.lngs.length;
+    predictions.push({
+      geometry: { type: 'Point', coordinates: [avgLng, avgLat] },
+      properties: {
+        categoryId: catId,
+        categoryLabel: CATEGORY_LABELS[catId] || catId,
+        season,
+        count: c.count,
+        yearRange,
+      },
+    });
+  });
+  return predictions;
+}
+
+/* ── Normalize features → Mapbox-compatible GeoJSON ───────────────────── */
+
+function buildGeoJSON(
+  raw: { features?: (EONETFeature | PredictionFeature)[] },
+  isPrediction: boolean,
+): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+
+  for (const f of raw.features || []) {
+    if (isPrediction) {
+      const pf = f as PredictionFeature;
+      const p = pf.properties;
+      features.push({
+        type: 'Feature',
+        geometry: pf.geometry,
+        properties: {
+          categoryId: p.categoryId,
+          title: `Predicted ${p.categoryLabel} for ${p.season}`,
+          extra: `We predict ${p.categoryLabel.toLowerCase()} in this area for ${p.season} because ${p.count} similar ${p.categoryLabel.toLowerCase()} occurred here in past ${p.season}s (${p.yearRange}).`,
+          sourcesJson: '[]',
+          isPrediction: true,
+          lat: pf.geometry.coordinates[1],
+          lon: pf.geometry.coordinates[0],
+        },
+      });
+    } else {
+      const ef = f as EONETFeature;
+      const catId = ef.properties?.categories?.[0]?.id || 'other';
+      const title = ef.properties?.title || 'Event';
+      const sources = ef.properties?.sources || [];
+
+      if (ef.geometry?.type === 'Point' && ef.geometry.coordinates) {
+        const [lng, lat] = ef.geometry.coordinates as number[];
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [lng, lat] },
+          properties: { categoryId: catId, title, extra: '', sourcesJson: JSON.stringify(sources), isPrediction: false, lat, lon: lng },
+        });
+      } else if (ef.geometry?.type === 'Polygon' && ef.geometry.coordinates) {
+        const ring = ef.geometry.coordinates[0] as [number, number][];
+        const cLng = ring.reduce((s, [x]) => s + x, 0) / ring.length;
+        const cLat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
+        features.push({
+          type: 'Feature',
+          geometry: ef.geometry as GeoJSON.Geometry,
+          properties: { categoryId: catId, title, extra: '', sourcesJson: JSON.stringify(sources), isPrediction: false, lat: cLat, lon: cLng },
+        });
+      }
+    }
+  }
+
+  return { type: 'FeatureCollection', features };
+}
+
+/* ── Popup HTML ───────────────────────────────────────────────────────── */
+
+function renderPopup(title: string, extra: string, sourceLinks: string, newsHtml: string) {
+  return (
+    `<div style="padding:10px 12px;min-width:260px;max-width:340px;font-family:system-ui,sans-serif;font-size:14px;line-height:1.5">` +
+    `<strong style="color:#f8fafc">${title}</strong><br/>` +
+    (extra ? `<span style="color:#94a3b8;font-size:12px">${extra}</span><br/>` : '') +
+    (sourceLinks ? `<div style="margin-top:6px"><strong>Official links:</strong> ${sourceLinks}</div>` : '') +
+    (newsHtml ? `<div style="margin-top:8px;border-top:1px solid #334155;padding-top:8px">${newsHtml}</div>` : '') +
+    `</div>`
+  );
+}
+
+/* ── Auto-rotate settings ─────────────────────────────────────────────── */
+
+const SECONDS_PER_REVOLUTION = 240;
+const MAX_SPIN_ZOOM = 5;
+const IDLE_RESUME_MS = 10_000;
+
+/* ════════════════════════════════════════════════════════════════════════ */
 
 type FocusEvent = { title: string; sources: { url?: string }[]; lat: number; lon: number; category?: string };
 
-function addOverlay(
-  map: google.maps.Map,
-  geojson: { features?: EONETFeature[] | PredictionFeature[] },
-  overlaysRef: { current: OverlayObject[] },
-  isPrediction: boolean,
-  focusEvent?: FocusEvent | null
-) {
-  overlaysRef.current.forEach((o) => {
-    if (o instanceof google.maps.InfoWindow) o.close();
-    else o.setMap(null);
-  });
-  overlaysRef.current = [];
-
-  const infoWindow = new google.maps.InfoWindow({
-    pixelOffset: new google.maps.Size(0, -10),
-  });
-  overlaysRef.current.push(infoWindow);
-
-  const renderContent = (
-    title: string,
-    extra: string,
-    sourceLinks: string,
-    newsHtml: string
-  ) =>
-    `<div style="padding:10px 12px;min-width:260px;max-width:360px;background:#ffffff;color:#1e293b;font-family:system-ui,sans-serif;font-size:14px;line-height:1.5;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.15);">` +
-    `<strong style="color:#0f172a">${title || 'Event'}</strong><br/>` +
-    (extra ? `<span style="color:#64748b;font-size:12px">${extra}</span><br/>` : '') +
-    (sourceLinks ? `<div style="margin-top:6px"><strong>Official links:</strong> ${sourceLinks}</div>` : '') +
-    (newsHtml ? `<div style="margin-top:8px;border-top:1px solid #e2e8f0;padding-top:8px">${newsHtml}</div>` : '') +
-    `</div>`;
-
-  const showInfo = (
-    title: string,
-    extra: string,
-    sources: { url?: string }[],
-    pos: google.maps.LatLng,
-    isPred: boolean,
-    lat?: number,
-    lon?: number,
-    categoryId?: string
-  ) => {
-    const sourceLinks =
-      !isPred &&
-      sources
-        .filter((s) => s.url)
-        .map((s) => `<a href="${s.url}" target="_blank" rel="noopener" style="color:#2563eb">Source</a>`)
-        .join(' ');
-
-    const updateNews = (newsHtml: string) => {
-      infoWindow.setContent(renderContent(title, extra, sourceLinks || '', newsHtml));
-    };
-
-    updateNews('<span style="color:#64748b;font-size:12px">Related News: Fetching news…</span>');
-    infoWindow.open(map);
-    infoWindow.setPosition(pos);
-
-    if (isPred || lat == null || lon == null) {
-      updateNews('');
-      return;
-    }
-
-    fetchEventNews({
-      title: title || 'disaster',
-      lat,
-      lon,
-      days: 3,
-      categoryId: categoryId || 'other',
-    })
-      .then((data) => {
-        const arts = data.articles || [];
-        if (arts.length === 0) {
-          updateNews('');
-          return;
-        }
-        const list = arts
-          .slice(0, 8)
-          .map(
-            (a: { url?: string; title?: string; source?: string }) =>
-              `<a href="${a.url}" target="_blank" rel="noopener" style="color:#2563eb;font-size:12px;display:block;margin:4px 0">${(a.title || 'Article').slice(0, 60)}…</a>`
-          )
-          .join('');
-        updateNews(`<strong>Related News</strong> (${arts.length}):<br/>${list}`);
-      })
-      .catch(() => updateNews(''));
-  };
-
-  for (const f of geojson.features || []) {
-    const props = f.properties || {};
-    const catId = 'categories' in props ? props.categories?.[0]?.id : (props as PredictionFeature['properties']).categoryId;
-    const { fill: fillColor, stroke: strokeColor } = getCategoryColor(catId, isPrediction);
-
-    if (isPrediction && 'categoryId' in props) {
-      const pf = f as PredictionFeature;
-      const p = pf.properties;
-      const [lng, lat] = pf.geometry.coordinates;
-      const pos = new google.maps.LatLng(lat, lng);
-      const title = `Predicted ${p.categoryLabel} for ${p.season}`;
-      const extra = `We predict ${p.categoryLabel.toLowerCase()} in this area for ${p.season} because ${p.count} similar ${p.categoryLabel.toLowerCase()} occurred here in past ${p.season}s (${p.yearRange}).`;
-      const marker = new google.maps.Marker({
-        map,
-        position: pos,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 8,
-          fillColor,
-          fillOpacity: 0.9,
-          strokeColor,
-          strokeWeight: 1.5,
-        },
-      });
-      marker.addListener('click', () => showInfo(title, extra, [], pos, true, undefined, undefined, undefined));
-      overlaysRef.current.push(marker);
-      continue;
-    }
-
-    const eonetF = f as EONETFeature;
-    const title = eonetF.properties?.title || 'Event';
-    const sources = Array.isArray(eonetF.properties?.sources) ? eonetF.properties.sources : [];
-    const extra = '';
-    if (eonetF.geometry?.type === 'Point' && eonetF.geometry.coordinates) {
-      const [lng, lat] = eonetF.geometry.coordinates as number[];
-      const pos = new google.maps.LatLng(lat, lng);
-      const marker = new google.maps.Marker({
-        map,
-        position: pos,
-        icon: {
-          path: google.maps.SymbolPath.CIRCLE,
-          scale: 8,
-          fillColor,
-          fillOpacity: 0.9,
-          strokeColor,
-          strokeWeight: 1.5,
-        },
-      });
-      marker.addListener('click', () => showInfo(title, extra, sources, pos, false, lat, lng, catId));
-      overlaysRef.current.push(marker);
-    } else if (eonetF.geometry?.type === 'Polygon' && eonetF.geometry.coordinates) {
-      const path = (eonetF.geometry.coordinates[0] as [number, number][]).map(([ln, lt]) => ({ lat: lt, lng: ln }));
-      const poly = new google.maps.Polygon({
-        map,
-        paths: path,
-        fillColor,
-        fillOpacity: isPrediction ? 0.15 : 0.2,
-        strokeColor,
-        strokeWeight: 1,
-      });
-      const ring = eonetF.geometry.coordinates[0] as [number, number][];
-      const clng = ring.reduce((s, [x]) => s + x, 0) / ring.length;
-      const clat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
-      poly.addListener('click', (e: google.maps.MapMouseEvent) =>
-        showInfo(title, extra, sources, e.latLng || new google.maps.LatLng(clat, clng), false, clat, clng, catId)
-      );
-      overlaysRef.current.push(poly);
-    }
-  }
-
-  if (focusEvent && !isPrediction) {
-    const pos = new google.maps.LatLng(focusEvent.lat, focusEvent.lon);
-    map.panTo(pos);
-    map.setZoom(6);
-    showInfo(
-      focusEvent.title,
-      '',
-      focusEvent.sources || [],
-      pos,
-      false,
-      focusEvent.lat,
-      focusEvent.lon,
-      focusEvent.category
-    );
-  }
-}
-
 export default function DisasterMap() {
   const [mapMode, setMapMode] = useState<'current' | 'predictions'>('current');
-  const [seasonFilter, setSeasonFilter] = useState<string>('Summer');
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const overlaysRef = useRef<OverlayObject[]>([]);
+  const [seasonFilter, setSeasonFilter] = useState('Summer');
+  const [mapError, setMapError] = useState<string | null>(null);
+  const [selectedContext, setSelectedContext] = useState<MapContext | null>(null);
+  const [activeEvents, setActiveEvents] = useState<EventSummary[]>([]);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<mapboxgl.Map | null>(null);
+  const popupRef = useRef<mapboxgl.Popup | null>(null);
+  const mapReadyRef = useRef(false);
   const fetchInProgressRef = useRef(false);
   const focusEventRef = useRef<FocusEvent | null>(null);
-  const [chatContext, setChatContext] = useState<MapClickContext>(null);
-  const geoDataRef = useRef<{ features?: EONETFeature[] | PredictionFeature[] } | null>(null);
-  const [activeEvents, setActiveEvents] = useState<{ title: string; category: string; lat: number; lng: number }[]>([]);
+  const eonetFeaturesRef = useRef<GeoJSON.Feature[]>([]);
 
+  /* rotation refs */
+  const userInteractingRef = useRef(false);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* keep latest state in refs so the stable fetchData can read them */
+  const mapModeRef = useRef(mapMode);
+  mapModeRef.current = mapMode;
+  const seasonRef = useRef(seasonFilter);
+  seasonRef.current = seasonFilter;
+
+  /* ── Focus event from DisasterNews page ──────────────────────────── */
   useEffect(() => {
     try {
       const s = sessionStorage.getItem('disasterMapFocus');
       if (s) {
-        const parsed = JSON.parse(s);
+        const p = JSON.parse(s);
         focusEventRef.current = {
-          title: parsed.title || 'Event',
-          sources: parsed.sources || [],
-          lat: parseFloat(parsed.lat) || 0,
-          lon: parseFloat(parsed.lon) || 0,
-          category: parsed.category,
+          title: p.title || 'Event',
+          sources: p.sources || [],
+          lat: parseFloat(p.lat) || 0,
+          lon: parseFloat(p.lon) || 0,
+          category: p.category,
         };
         sessionStorage.removeItem('disasterMapFocus');
       }
@@ -389,207 +280,390 @@ export default function DisasterMap() {
     }
   }, []);
 
-  const { isLoaded, loadError } = useJsApiLoader({
-    googleMapsApiKey: GOOGLE_MAPS_API_KEY,
-  });
-
+  /* ── Fetch EONET / predictions and push into Mapbox source ───────── */
   const fetchData = useCallback(() => {
     const map = mapRef.current;
-    if (!map || fetchInProgressRef.current) return;
-
+    if (!map || !mapReadyRef.current || fetchInProgressRef.current) return;
     fetchInProgressRef.current = true;
-    const done = () => {
-      fetchInProgressRef.current = false;
+    const done = () => { fetchInProgressRef.current = false; };
+    const mode = mapModeRef.current;
+    const season = seasonRef.current;
+
+    const applyGeoJSON = (gj: GeoJSON.FeatureCollection, isPrediction: boolean) => {
+      const src = map.getSource('eonet-data') as mapboxgl.GeoJSONSource | undefined;
+      if (src) src.setData(gj);
+      map.setPaintProperty('eonet-fills', 'fill-opacity', isPrediction ? 0.15 : 0.25);
     };
 
-    if (mapMode === 'current') {
-      // Current events: always fetch global recent data (last 14 days, active events)
-      const worldBbox = '-180,85,180,-85';
+    if (mode === 'current') {
       const focus = focusEventRef.current;
       if (focus) focusEventRef.current = null;
-      fetchEonet({ bbox: worldBbox, status: 'open', days: '14' })
-        .then((geojson) => {
-          geoDataRef.current = geojson;
-          // Extract events for chatbot context
-          const evts: { title: string; category: string; lat: number; lng: number }[] = [];
-          for (const f of geojson.features || []) {
-            const ef = f as EONETFeature;
-            const title = ef.properties?.title || 'Event';
-            const catId = ef.properties?.categories?.[0]?.id || 'other';
-            const cat = CATEGORY_LABELS[catId] || catId;
-            let lat = 0, lng = 0;
-            if (ef.geometry?.type === 'Point' && ef.geometry.coordinates) {
-              const [ln, lt] = ef.geometry.coordinates as number[];
-              lat = lt; lng = ln;
-            } else if (ef.geometry?.type === 'Polygon' && ef.geometry.coordinates) {
-              const ring = ef.geometry.coordinates[0] as [number, number][];
-              lng = ring.reduce((s, [x]) => s + x, 0) / ring.length;
-              lat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
+
+      fetchEonet({ bbox: '-180,85,180,-85', status: 'open', days: '14' })
+        .then((raw) => {
+          const gj = buildGeoJSON(raw, false);
+          eonetFeaturesRef.current = gj.features;
+
+          /* build deduplicated event list for chat context */
+          const seen = new Set<string>();
+          const evts: EventSummary[] = [];
+          for (const f of gj.features) {
+            const t = f.properties?.title;
+            if (t && !seen.has(t)) {
+              seen.add(t);
+              evts.push({ title: t, category: f.properties?.categoryId || 'other', lat: Number(f.properties?.lat), lon: Number(f.properties?.lon) });
             }
-            if (lat || lng) evts.push({ title, category: cat, lat, lng });
+            if (evts.length >= 25) break;
           }
           setActiveEvents(evts);
-          addOverlay(map, geojson, overlaysRef, false, focus);
+
+          applyGeoJSON(gj, false);
+
+          if (focus) {
+            map.flyTo({ center: [focus.lon, focus.lat], zoom: 6, duration: 1500 });
+            setTimeout(() => {
+              const srcLinks = (focus.sources || [])
+                .filter((s) => s.url)
+                .map((s) => `<a href="${s.url}" target="_blank" rel="noopener" style="color:#60a5fa">Source</a>`)
+                .join(' ');
+              if (popupRef.current) popupRef.current.remove();
+              const popup = new mapboxgl.Popup({ offset: 10, maxWidth: '360px', className: 'dark-popup' })
+                .setLngLat([focus.lon, focus.lat])
+                .setHTML(renderPopup(focus.title, '', srcLinks, '<span style="color:#94a3b8;font-size:12px">Fetching news\u2026</span>'))
+                .addTo(map);
+              popupRef.current = popup;
+
+              fetchEventNews({ title: focus.title, lat: focus.lat, lon: focus.lon, days: 3, categoryId: focus.category || 'other' })
+                .then((data) => {
+                  const arts = data.articles || [];
+                  if (!arts.length) { popup.setHTML(renderPopup(focus.title, '', srcLinks, '')); return; }
+                  const list = arts.slice(0, 8).map((a: any) =>
+                    `<a href="${a.url}" target="_blank" rel="noopener" style="color:#60a5fa;font-size:12px;display:block;margin:4px 0">${(a.title || 'Article').slice(0, 60)}\u2026</a>`
+                  ).join('');
+                  popup.setHTML(renderPopup(focus.title, '', srcLinks, `<strong>Related News</strong> (${arts.length}):<br/>${list}`));
+                })
+                .catch(() => popup.setHTML(renderPopup(focus.title, '', srcLinks, '')));
+            }, 1600);
+          }
         })
         .catch((e) => console.error('EONET overlay error:', e))
         .finally(done);
     } else {
-      // Seasonal predictions: fetch 5 years of historical data, cluster by location+category
+      /* Seasonal predictions */
       const worldBbox = '-180,85,180,-85';
       const eonetReqs = [];
       const usgsReqs = [];
       for (let y = 0; y < PREDICTION_YEARS; y++) {
-        const { start, end } = getSeasonDateRange(seasonFilter, y);
-        eonetReqs.push(
-          fetchEonet({ bbox: worldBbox, status: 'closed', start, end })
-        );
-        usgsReqs.push(
-          fetchEarthquakes({ bbox: worldBbox, start, end })
-        );
+        const { start, end } = getSeasonDateRange(season, y);
+        eonetReqs.push(fetchEonet({ bbox: worldBbox, status: 'closed', start, end }));
+        usgsReqs.push(fetchEarthquakes({ bbox: worldBbox, start, end }));
       }
+
       Promise.all([...eonetReqs, ...usgsReqs])
         .then((results) => {
           const eonetAll = results.slice(0, PREDICTION_YEARS) as { features?: EONETFeature[] }[];
-          const usgsAll = results.slice(PREDICTION_YEARS) as { features?: { geometry?: { coordinates?: number[] }; properties?: { mag?: number; place?: string; time?: number } }[] }[];
+          const usgsAll = results.slice(PREDICTION_YEARS) as { features?: any[] }[];
           const eonetFeatures: EONETFeature[] = [];
-          for (const data of eonetAll) {
+          for (const data of eonetAll)
             for (const f of data.features || []) {
-              const closed = f.properties?.closed;
-              const month = closed ? new Date(closed).getMonth() + 1 : 0;
-              if (monthInSeason(month, seasonFilter)) eonetFeatures.push(f);
+              const month = f.properties?.closed ? new Date(f.properties.closed).getMonth() + 1 : 0;
+              if (monthInSeason(month, season)) eonetFeatures.push(f);
             }
-          }
-          const usgsFeatures: { geometry?: { coordinates?: number[] }; properties?: { mag?: number; place?: string; time?: number } }[] = [];
-          for (const data of usgsAll) {
+          const usgsFeatures: any[] = [];
+          for (const data of usgsAll)
             for (const f of data.features || []) {
-              const time = f.properties?.time;
-              const month = time ? new Date(time).getMonth() + 1 : 0;
-              if (monthInSeason(month, seasonFilter)) usgsFeatures.push(f);
+              const month = f.properties?.time ? new Date(f.properties.time).getMonth() + 1 : 0;
+              if (monthInSeason(month, season)) usgsFeatures.push(f);
             }
-          }
-          const predictions = buildPredictionFeatures(eonetFeatures, usgsFeatures, seasonFilter);
-          addOverlay(map, { features: predictions }, overlaysRef, true);
+          const predictions = buildPredictionFeatures(eonetFeatures, usgsFeatures, season);
+          applyGeoJSON(buildGeoJSON({ features: predictions }, true), true);
         })
         .catch((e) => console.error('Prediction overlay error:', e))
         .finally(done);
     }
-  }, [mapMode, seasonFilter]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    fetchData();
-  }, [mapMode, seasonFilter, fetchData]);
+  /* ── Handle tool commands from chat ──────────────────────────────── */
+  const handleCommand = useCallback((cmd: ToolCommand) => {
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current) return;
 
-  const findNearbyEvents = useCallback((lat: number, lng: number, radiusDeg = 5): { title: string; category: string }[] => {
-    const features = geoDataRef.current?.features || [];
-    const nearby: { title: string; category: string }[] = [];
-    for (const f of features) {
-      const props = f.properties || {};
-      let eLat = 0;
-      let eLng = 0;
-      const geom = (f as EONETFeature).geometry;
-      if (geom?.type === 'Point' && geom.coordinates) {
-        const [ln, lt] = geom.coordinates as number[];
-        eLat = lt;
-        eLng = ln;
-      } else if (geom?.type === 'Polygon' && geom.coordinates) {
-        const ring = geom.coordinates[0] as [number, number][];
-        eLng = ring.reduce((s, [x]) => s + x, 0) / ring.length;
-        eLat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
-      } else if ('categoryId' in props) {
-        const pf = f as PredictionFeature;
-        const [ln, lt] = pf.geometry.coordinates;
-        eLat = lt;
-        eLng = ln;
-      } else {
-        continue;
+    switch (cmd.tool) {
+      case 'map.flyTo': {
+        const { lng, lat, zoom } = cmd.args;
+        if (typeof lng !== 'number' || typeof lat !== 'number') break;
+        map.flyTo({ center: [lng, lat], zoom: zoom ?? 5, duration: 2000 });
+        setSelectedContext({ type: 'location', lat, lon: lng });
+        break;
       }
-      const dist = Math.sqrt((eLat - lat) ** 2 + (eLng - lng) ** 2);
-      if (dist <= radiusDeg) {
-        const title = ('title' in props ? props.title : `Predicted ${'categoryLabel' in props ? props.categoryLabel : 'event'}`) || 'Event';
-        const category = ('categories' in props && Array.isArray(props.categories))
-          ? (CATEGORY_LABELS[props.categories[0]?.id || ''] || props.categories[0]?.id || 'Other')
-          : ('categoryLabel' in props ? props.categoryLabel : 'Other');
-        nearby.push({ title, category });
+      case 'map.highlightEvent': {
+        const { title } = cmd.args;
+        if (!title) break;
+        const needle = String(title).toLowerCase();
+        const feature = eonetFeaturesRef.current.find((f) =>
+          f.properties?.title?.toLowerCase() === needle ||
+          f.properties?.title?.toLowerCase().includes(needle),
+        );
+        if (!feature) break;
+
+        const lat = Number(feature.properties?.lat);
+        const lon = Number(feature.properties?.lon);
+        const eventTitle = feature.properties?.title || 'Event';
+        const categoryId = feature.properties?.categoryId || 'other';
+        let sources: { url?: string }[] = [];
+        try { sources = JSON.parse(feature.properties?.sourcesJson || '[]'); } catch { /* empty */ }
+
+        map.flyTo({ center: [lon, lat], zoom: 6, duration: 2000 });
+        setSelectedContext({ type: 'event', lat, lon, title: eventTitle, category: categoryId, sources });
+
+        /* after fly animation finishes, open popup with news */
+        setTimeout(() => {
+          if (popupRef.current) popupRef.current.remove();
+          const srcLinks = sources
+            .filter((s) => s.url)
+            .map((s) => `<a href="${s.url}" target="_blank" rel="noopener" style="color:#60a5fa">Source</a>`)
+            .join(' ');
+          const popup = new mapboxgl.Popup({ offset: 10, maxWidth: '360px', className: 'dark-popup' })
+            .setLngLat([lon, lat])
+            .setHTML(renderPopup(eventTitle, '', srcLinks, '<span style="color:#94a3b8;font-size:12px">Fetching news\u2026</span>'))
+            .addTo(map);
+          popupRef.current = popup;
+
+          fetchEventNews({ title: eventTitle, lat, lon, days: 3, categoryId })
+            .then((data) => {
+              const arts = data.articles || [];
+              if (!arts.length) { popup.setHTML(renderPopup(eventTitle, '', srcLinks, '')); return; }
+              const list = arts.slice(0, 8).map((a: any) =>
+                `<a href="${a.url}" target="_blank" rel="noopener" style="color:#60a5fa;font-size:12px;display:block;margin:4px 0">${(a.title || 'Article').slice(0, 60)}\u2026</a>`
+              ).join('');
+              popup.setHTML(renderPopup(eventTitle, '', srcLinks, `<strong>Related News</strong> (${arts.length}):<br/>${list}`));
+            })
+            .catch(() => popup.setHTML(renderPopup(eventTitle, '', srcLinks, '')));
+        }, 2200);
+        break;
       }
     }
-    return nearby.slice(0, 10);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleChatMapAction = useCallback((action: { lat: number; lng: number; zoom: number }) => {
-    const map = mapRef.current;
-    if (!map) return;
-    map.panTo({ lat: action.lat, lng: action.lng });
-    map.setZoom(action.zoom);
-  }, []);
+  /* ── Initialize Mapbox GL map (runs once) ────────────────────────── */
+  useEffect(() => {
+    const token = import.meta.env.VITE_MAPBOX_TOKEN;
+    if (!token) {
+      setMapError('Add your Mapbox token to .env as VITE_MAPBOX_TOKEN');
+      return;
+    }
+    if (!containerRef.current) return;
 
-  const handleMapClick = useCallback(
-    (e: google.maps.MapMouseEvent) => {
-      if (!e.latLng) return;
-      const lat = e.latLng.lat();
-      const lng = e.latLng.lng();
-      const nearbyEvents = findNearbyEvents(lat, lng);
-      setChatContext({ lat, lng, nearbyEvents });
-    },
-    [findNearbyEvents]
-  );
+    mapboxgl.accessToken = token;
 
-  const onMapLoad = useCallback(
-    (map: google.maps.Map) => {
-      mapRef.current = map;
-      setTimeout(fetchData, 500);
-      const updateLabelVisibility = () => {
-        const zoom = map.getZoom() ?? 0;
-        const hideLabels = zoom < ZOOM_SHOW_COUNTRY_LABELS;
-        map.setOptions({
-          styles: hideLabels ? [...BASE_MAP_STYLES, HIDE_COUNTRY_LABELS_STYLE] : BASE_MAP_STYLES,
-        });
-      };
-      updateLabelVisibility();
-      map.addListener('zoom_changed', updateLabelVisibility);
-    },
-    [fetchData]
-  );
-
-  const onMapUnmount = useCallback(() => {
-    mapRef.current = null;
-    overlaysRef.current.forEach((o) => {
-      if (o instanceof google.maps.InfoWindow) o.close();
-      else o.setMap(null);
+    const map = new mapboxgl.Map({
+      container: containerRef.current,
+      style: 'mapbox://styles/mapbox/dark-v11',
+      center: [0, 20],
+      zoom: 1.5,
+      projection: 'globe',
     });
-    overlaysRef.current = [];
-  }, []);
 
-  if (loadError) {
+    map.addControl(new mapboxgl.NavigationControl(), 'bottom-right');
+
+    /* ── Globe atmosphere ──────────────────────────────────────────── */
+    map.on('style.load', () => {
+      map.setFog({
+        color: 'rgb(186, 210, 235)',
+        'high-color': 'rgb(36, 92, 223)',
+        'horizon-blend': 0.02,
+        'space-color': 'rgb(11, 11, 25)',
+        'star-intensity': 0.6,
+      });
+    });
+
+    /* ── Sources & layers ──────────────────────────────────────────── */
+    map.on('load', () => {
+      map.addSource('eonet-data', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
+      /* polygon fills */
+      map.addLayer({
+        id: 'eonet-fills',
+        type: 'fill',
+        source: 'eonet-data',
+        filter: ['==', ['geometry-type'], 'Polygon'],
+        paint: { 'fill-color': FILL_EXPR, 'fill-opacity': 0.25 },
+      });
+
+      /* polygon outlines */
+      map.addLayer({
+        id: 'eonet-outlines',
+        type: 'line',
+        source: 'eonet-data',
+        filter: ['==', ['geometry-type'], 'Polygon'],
+        paint: { 'line-color': STROKE_EXPR, 'line-width': 1 },
+      });
+
+      /* point circles */
+      map.addLayer({
+        id: 'eonet-circles',
+        type: 'circle',
+        source: 'eonet-data',
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: {
+          'circle-radius': 7,
+          'circle-color': FILL_EXPR,
+          'circle-opacity': 0.9,
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': STROKE_EXPR,
+        },
+      });
+
+      /* ── Click → popup ───────────────────────────────────────────── */
+      const handleClick = (e: mapboxgl.MapMouseEvent & { features?: mapboxgl.MapboxGeoJSONFeature[] }) => {
+        const feat = e.features?.[0];
+        if (!feat?.properties) return;
+        const p = feat.properties;
+        const coords = e.lngLat;
+        const title = p.title || 'Event';
+        const extra = p.extra || '';
+        const isPred = p.isPrediction === true || p.isPrediction === 'true';
+        let sources: { url?: string }[] = [];
+        try { sources = JSON.parse(p.sourcesJson || '[]'); } catch { /* empty */ }
+        const lat = Number(p.lat);
+        const lon = Number(p.lon);
+        const categoryId = p.categoryId;
+
+        setSelectedContext({
+          type: 'event',
+          lat,
+          lon,
+          title,
+          category: categoryId || undefined,
+          sources,
+        });
+
+        const srcLinks = !isPred
+          ? sources.filter((s) => s.url).map((s) => `<a href="${s.url}" target="_blank" rel="noopener" style="color:#60a5fa">Source</a>`).join(' ')
+          : '';
+
+        if (popupRef.current) popupRef.current.remove();
+        const popup = new mapboxgl.Popup({ offset: 10, maxWidth: '360px', className: 'dark-popup' })
+          .setLngLat(coords)
+          .setHTML(renderPopup(title, extra, srcLinks, isPred ? '' : '<span style="color:#94a3b8;font-size:12px">Fetching news\u2026</span>'))
+          .addTo(map);
+        popupRef.current = popup;
+
+        if (!isPred && lat && lon) {
+          fetchEventNews({ title, lat, lon, days: 3, categoryId: categoryId || 'other' })
+            .then((data) => {
+              const arts = data.articles || [];
+              if (!arts.length) { popup.setHTML(renderPopup(title, extra, srcLinks, '')); return; }
+              const list = arts.slice(0, 8).map((a: any) =>
+                `<a href="${a.url}" target="_blank" rel="noopener" style="color:#60a5fa;font-size:12px;display:block;margin:4px 0">${(a.title || 'Article').slice(0, 60)}\u2026</a>`
+              ).join('');
+              popup.setHTML(renderPopup(title, extra, srcLinks, `<strong>Related News</strong> (${arts.length}):<br/>${list}`));
+            })
+            .catch(() => popup.setHTML(renderPopup(title, extra, srcLinks, '')));
+        }
+      };
+
+      map.on('click', 'eonet-circles', handleClick);
+      map.on('click', 'eonet-fills', handleClick);
+
+      /* pointer cursor on hover */
+      for (const layer of ['eonet-circles', 'eonet-fills'] as const) {
+        map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
+      }
+
+      /* General map click → set location context */
+      map.on('click', (e) => {
+        const features = map.queryRenderedFeatures(e.point, { layers: ['eonet-circles', 'eonet-fills'] });
+        if (features.length > 0) return;
+        setSelectedContext({ type: 'location', lat: e.lngLat.lat, lon: e.lngLat.lng });
+      });
+
+      /* mark ready & load initial data */
+      mapRef.current = map;
+      mapReadyRef.current = true;
+      fetchData();
+
+      /* start auto-rotate */
+      spinGlobe();
+    });
+
+    /* ── Auto-rotate ───────────────────────────────────────────────── */
+    function spinGlobe() {
+      if (userInteractingRef.current || !map) return;
+      const zoom = map.getZoom();
+      if (zoom >= MAX_SPIN_ZOOM) return;
+      const dps = 360 / SECONDS_PER_REVOLUTION;
+      const center = map.getCenter();
+      center.lng -= dps;
+      map.easeTo({ center, duration: 1000, easing: (n) => n });
+    }
+
+    map.on('moveend', () => {
+      if (!userInteractingRef.current) spinGlobe();
+    });
+
+    const pauseRotation = () => {
+      userInteractingRef.current = true;
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+    const scheduleResume = () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = setTimeout(() => {
+        userInteractingRef.current = false;
+        spinGlobe();
+      }, IDLE_RESUME_MS);
+    };
+
+    map.on('mousedown', pauseRotation);
+    map.on('touchstart', pauseRotation);
+    map.on('mouseup', scheduleResume);
+    map.on('touchend', scheduleResume);
+    map.on('dragend', scheduleResume);
+    map.on('wheel', () => { pauseRotation(); scheduleResume(); });
+    map.on('zoomstart', pauseRotation);
+    map.on('zoomend', scheduleResume);
+
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      map.remove();
+      mapRef.current = null;
+      mapReadyRef.current = false;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Re-fetch when mode / season changes ─────────────────────────── */
+  useEffect(() => {
+    fetchData();
+  }, [mapMode, seasonFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Error state ─────────────────────────────────────────────────── */
+  if (mapError) {
     return (
       <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
         <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-6 text-center">
-          <p className="font-medium text-destructive">Failed to load Google Maps</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Check your API key configuration and ensure Maps JavaScript API is enabled.
-          </p>
+          <p className="font-medium text-destructive">Failed to load map</p>
+          <p className="mt-2 text-sm text-muted-foreground">{mapError}</p>
         </div>
       </div>
     );
   }
 
-  if (!isLoaded) {
-    return (
-      <div className="flex h-[calc(100vh-4rem)] items-center justify-center">
-        <div className="text-muted-foreground">Loading map...</div>
-      </div>
-    );
-  }
-
+  /* ── Render ──────────────────────────────────────────────────────── */
   return (
     <div className="h-[calc(100vh-4rem)] flex flex-row w-full">
       <div className="w-3/4 h-full relative flex-shrink-0">
+        {/* Mode & season toggles */}
         <div className="absolute top-4 left-4 z-[1000] flex flex-wrap gap-2">
           <div className="flex rounded border border-border bg-card/90 backdrop-blur-md p-1">
             <button
               onClick={() => setMapMode('current')}
               className={cn(
                 'px-3 py-1.5 text-xs font-medium transition-colors rounded',
-                mapMode === 'current' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
+                mapMode === 'current' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
               )}
             >
               Current Events
@@ -598,7 +672,7 @@ export default function DisasterMap() {
               onClick={() => setMapMode('predictions')}
               className={cn(
                 'px-3 py-1.5 text-xs font-medium transition-colors rounded',
-                mapMode === 'predictions' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
+                mapMode === 'predictions' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted',
               )}
             >
               Seasonal Predictions
@@ -612,7 +686,7 @@ export default function DisasterMap() {
                   onClick={() => setSeasonFilter(s)}
                   className={cn(
                     'px-2 py-1.5 text-xs font-medium transition-colors rounded',
-                    seasonFilter === s ? 'bg-indigo-600 text-white' : 'text-muted-foreground hover:bg-muted'
+                    seasonFilter === s ? 'bg-indigo-600 text-white' : 'text-muted-foreground hover:bg-muted',
                   )}
                 >
                   {s}
@@ -623,30 +697,19 @@ export default function DisasterMap() {
         </div>
         <div className="absolute top-14 left-4 z-[1000] px-3 py-2 rounded bg-card/90 backdrop-blur-md border border-border text-xs text-muted-foreground max-w-xs">
           {mapMode === 'current'
-            ? 'NASA EONET — Active events happening now (last 14 days). Click markers for details.'
-            : `Predicted risk areas for ${seasonFilter} — based on where similar disasters have occurred in past ${seasonFilter}s. Click markers for details.`}
+            ? 'NASA EONET \u2014 Active events happening now (last 14 days). Click markers for details.'
+            : `Predicted risk areas for ${seasonFilter} \u2014 based on where similar disasters have occurred in past ${seasonFilter}s. Click markers for details.`}
         </div>
-        <GoogleMap
-          mapContainerStyle={mapContainerStyle}
-          center={defaultCenter}
-          zoom={2}
-          onLoad={onMapLoad}
-          onUnmount={onMapUnmount}
-          onClick={handleMapClick}
-          options={{
-            zoomControl: true,
-            mapTypeControl: true,
-            scaleControl: true,
-            streetViewControl: true,
-            rotateControl: true,
-            fullscreenControl: true,
-            styles: [...BASE_MAP_STYLES, HIDE_COUNTRY_LABELS_STYLE],
-          }}
-        />
+
+        {/* Mapbox GL container */}
+        <div ref={containerRef} className="w-full h-full" />
       </div>
-      <div className="w-1/4 h-full flex-shrink-0">
-        <MapChatbot mapContext={chatContext} onClearContext={() => setChatContext(null)} onMapAction={handleChatMapAction} activeEvents={activeEvents} />
-      </div>
+      <ChatPanel
+        selectedContext={selectedContext}
+        onClearContext={() => setSelectedContext(null)}
+        onCommand={handleCommand}
+        activeEvents={activeEvents}
+      />
     </div>
   );
 }

@@ -1,428 +1,472 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { MapPin, Newspaper, Filter, Search, ExternalLink, ChevronDown, Loader2, AlertTriangle } from 'lucide-react';
+import {
+  MapPin, Newspaper, AlertTriangle, ExternalLink, Loader2,
+  RefreshCw, Search, ChevronLeft, ChevronRight, X,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { fetchEonet, fetchEventNews } from '@/lib/disasterApi';
 
-const CATEGORY_WEIGHTS: Record<string, number> = {
-  severeStorms: 1.0,
-  volcanoes: 0.95,
-  earthquakes: 0.9,
-  floods: 0.9,
-  wildfires: 0.85,
-  landslides: 0.8,
-  seaLakeIce: 0.7,
-  temperatureExtremes: 0.75,
-  droughts: 0.65,
-  snow: 0.6,
-  other: 0.5,
+const API_BASE = '/api';
+
+/* ── Types ── */
+type Article = {
+  url: string;
+  title: string;
+  source?: string;
+  publishedAt?: string | null;
+  image?: string | null;
+  disasterTitle?: string;
+  disasterCategory?: string;
+  disasterSeverity?: string;
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
-  severeStorms: 'Severe Storms',
-  wildfires: 'Wildfires',
-  volcanoes: 'Volcanoes',
-  earthquakes: 'Earthquakes',
-  floods: 'Floods',
-  landslides: 'Landslides',
-  droughts: 'Droughts',
-  seaLakeIce: 'Ice',
-  snow: 'Snow',
-  temperatureExtremes: 'Temperature',
-  other: 'Other',
-};
-
-const CATEGORY_COLORS: Record<string, string> = {
-  severeStorms: 'bg-sky-500/20 text-sky-400 border-sky-500/30',
-  wildfires: 'bg-red-500/20 text-red-400 border-red-500/30',
-  volcanoes: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-  earthquakes: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-  floods: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30',
-  landslides: 'bg-stone-500/20 text-stone-400 border-stone-500/30',
-  droughts: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
-  seaLakeIce: 'bg-teal-500/20 text-teal-400 border-teal-500/30',
-  snow: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30',
-  temperatureExtremes: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
-};
-
-type Article = { url: string; title: string; source?: string; publishedAt?: string };
-
-type EventItem = {
+type AlertData = {
   id: string;
   title: string;
   category: string;
   categoryLabel: string;
+  alertText: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  urgencyScore: number;
   date: string;
   lat: number;
   lon: number;
-  magnitudeValue?: number;
-  sources: { url?: string }[];
-  urgencyScore: number;
-  urgencyBadge: 'High' | 'Medium' | 'Low';
-  articles?: Article[];
-  newsLoaded?: boolean;
-  newsLoading?: boolean;
+  magnitudeValue?: number | null;
+  articles: Article[];
 };
 
-const DAYS_OPTIONS = [
-  { label: '24h', days: 1 },
-  { label: '3 days', days: 3 },
-  { label: '7 days', days: 7 },
-];
+type LocationDisaster = {
+  id: string;
+  title: string;
+  category: string;
+  categoryLabel: string;
+  severity: string;
+  date: string;
+  lat: number;
+  lon: number;
+  magnitudeValue?: number | null;
+  source: string;
+  distanceKm?: number | null;
+};
 
-const AUTO_FETCH_COUNT = 10;
+type LocationResult = {
+  location: { query: string; displayName: string; lat: number; lon: number } | null;
+  disasters: LocationDisaster[];
+  totalFound: number;
+};
 
-function getCentroid(geom: { type: string; coordinates: number[] | number[][][] }): { lat: number; lon: number } {
-  if (geom.type === 'Point' && Array.isArray(geom.coordinates)) {
-    const [lon, lat] = geom.coordinates as number[];
-    return { lat, lon };
-  }
-  if (geom.type === 'Polygon' && Array.isArray(geom.coordinates) && geom.coordinates[0]) {
-    const ring = geom.coordinates[0] as [number, number][];
-    const lon = ring.reduce((s, [x]) => s + x, 0) / ring.length;
-    const lat = ring.reduce((s, [, y]) => s + y, 0) / ring.length;
-    return { lat, lon };
-  }
-  return { lat: 0, lon: 0 };
-}
 
-function computeUrgencyScore(date: string, magnitudeValue?: number, categoryId?: string): number {
-  const ageHours = (Date.now() - new Date(date).getTime()) / (1000 * 60 * 60);
-  const recency = Math.max(0, 1 - ageHours / (7 * 24));
-  const mag = magnitudeValue ?? 0;
-  const magNorm = Math.min(1, mag / 100);
-  const catWeight = CATEGORY_WEIGHTS[categoryId || 'other'] ?? 0.5;
-  return recency * 0.45 + magNorm * 0.2 + catWeight * 0.35;
-}
+/* ── Constants ── */
+const SEVERITY_BADGE_STYLES: Record<string, string> = {
+  critical: 'bg-red-500/15 text-red-600 border-red-500/30',
+  high: 'bg-amber-500/15 text-amber-600 border-amber-500/30',
+  medium: 'bg-yellow-500/15 text-yellow-600 border-yellow-500/30',
+  low: 'bg-slate-500/15 text-slate-600 border-slate-500/30',
+};
 
-function timeAgo(dateStr: string): string {
-  const ms = Date.now() - new Date(dateStr).getTime();
-  const hours = Math.floor(ms / (1000 * 60 * 60));
-  if (hours < 1) return 'Just now';
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return '1 day ago';
-  return `${days} days ago`;
-}
-
-function viewOnMap(event: EventItem) {
+/* ── Helpers ── */
+function viewOnMap(event: { id: string; title: string; lat: number; lon: number; [key: string]: unknown }) {
   sessionStorage.setItem('disasterMapFocus', JSON.stringify(event));
   window.location.href = '/map';
 }
 
+/* ── Deduplication by normalized title ── */
+function deduplicateByTitle<T extends { title: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const norm = item.title.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim().slice(0, 50);
+    if (seen.has(norm)) return false;
+    seen.add(norm);
+    return true;
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Component
+   ══════════════════════════════════════════════════════════════════ */
 export default function DisasterNews() {
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [categoryFilter, setCategoryFilter] = useState<string>('all');
-  const [daysFilter, setDaysFilter] = useState(3);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set());
-  const autoFetchedRef = useRef(false);
+  /* ── Alerts ── */
+  const [alerts, setAlerts] = useState<AlertData[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(true);
 
-  // Fetch EONET events
-  const loadEvents = useCallback(async () => {
-    setLoading(true);
-    autoFetchedRef.current = false;
+  const fetchAlerts = useCallback(async () => {
     try {
-      const data = await fetchEonet({ bbox: '-180,85,180,-85', status: 'open', days: '14' });
-      const features = (data.features || []) as Array<{
-        id?: string;
-        properties?: {
-          id?: string; title?: string; date?: string; closed?: string;
-          magnitudeValue?: number; categories?: { id?: string }[];
-          sources?: { url?: string }[];
-        };
-        geometry?: { type: string; coordinates: number[] | number[][][] };
-      }>;
-
-      const items: EventItem[] = features.map((f) => {
-        const centroid = getCentroid(f.geometry || { type: 'Point', coordinates: [0, 0] });
-        const catId = f.properties?.categories?.[0]?.id || 'other';
-        const date = f.properties?.date || f.properties?.closed || new Date().toISOString();
-        return {
-          id: f.properties?.id || f.id || `evt-${Math.random()}`,
-          title: f.properties?.title || 'Event',
-          category: catId,
-          categoryLabel: CATEGORY_LABELS[catId] || catId,
-          date,
-          lat: centroid.lat,
-          lon: centroid.lon,
-          magnitudeValue: f.properties?.magnitudeValue,
-          sources: f.properties?.sources || [],
-          urgencyScore: computeUrgencyScore(date, f.properties?.magnitudeValue, catId),
-          urgencyBadge: 'Medium' as const,
-        };
-      });
-
-      items.sort((a, b) => b.urgencyScore - a.urgencyScore);
-      const ranked = items.map((e, i) => {
-        const pct = (i + 1) / items.length;
-        let badge: 'High' | 'Medium' | 'Low' = 'Medium';
-        if (pct <= 0.2) badge = 'High';
-        else if (pct > 0.7) badge = 'Low';
-        return { ...e, urgencyBadge: badge };
-      });
-
-      setEvents(ranked);
-    } catch (err) {
-      console.error('Failed to load events:', err);
-      setEvents([]);
+      setAlertsLoading(true);
+      const res = await fetch(`${API_BASE}/alerts`);
+      if (!res.ok) throw new Error('Failed');
+      const data = await res.json();
+      // Deduplicate alerts by title
+      const raw: AlertData[] = data.alerts || [];
+      setAlerts(deduplicateByTitle(raw));
+    } catch {
+      setAlerts([]);
     } finally {
-      setLoading(false);
+      setAlertsLoading(false);
     }
   }, []);
 
-  useEffect(() => { loadEvents(); }, [loadEvents]);
+  useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
 
-  // Auto-fetch news for top events
-  const loadNewsForEvent = useCallback(async (eventId: string) => {
-    setEvents((prev) => prev.map((e) => e.id === eventId ? { ...e, newsLoading: true } : e));
-    const event = events.find((e) => e.id === eventId);
-    if (!event) return;
+  /* ── Headlines (for carousel + more articles) ── */
+  const [headlines, setHeadlines] = useState<Article[]>([]);
+  const [headlinesLoading, setHeadlinesLoading] = useState(true);
+  const [carouselIdx, setCarouselIdx] = useState(0);
 
-    try {
-      const data = await fetchEventNews({
-        title: event.title,
-        lat: event.lat,
-        lon: event.lon,
-        days: daysFilter,
-        categoryId: event.category,
-      });
-      const articles = (data.articles || []).slice(0, 10) as Article[];
-      setEvents((prev) => prev.map((e) =>
-        e.id === eventId ? { ...e, articles, newsLoaded: true, newsLoading: false } : e
-      ));
-    } catch {
-      setEvents((prev) => prev.map((e) =>
-        e.id === eventId ? { ...e, articles: [], newsLoaded: true, newsLoading: false } : e
-      ));
-    }
-  }, [events, daysFilter]);
-
-  // Auto-fetch news for top N events once loaded
   useEffect(() => {
-    if (loading || autoFetchedRef.current || events.length === 0) return;
-    autoFetchedRef.current = true;
-    const topEvents = events.slice(0, AUTO_FETCH_COUNT);
-    // Stagger fetches to avoid hammering the API
-    topEvents.forEach((evt, i) => {
-      setTimeout(() => loadNewsForEvent(evt.id), i * 500);
-    });
-  }, [loading, events.length]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/headlines`);
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+        if (!cancelled) setHeadlines(data.articles || []);
+      } catch {
+        if (!cancelled) setHeadlines([]);
+      } finally {
+        if (!cancelled) setHeadlinesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-  // Filtered list
-  const filtered = events
-    .filter((e) => categoryFilter === 'all' || e.category === categoryFilter)
-    .filter((e) => !searchQuery.trim() || e.title.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Auto-advance carousel
+  useEffect(() => {
+    const top = headlines.slice(0, 6);
+    if (top.length <= 1) return;
+    const t = setInterval(() => setCarouselIdx((i) => (i + 1) % top.length), 5000);
+    return () => clearInterval(t);
+  }, [headlines]);
 
-  const categories = ['all', ...new Set(events.map((e) => e.category))];
+  /* ── Location search ── */
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResult, setSearchResult] = useState<LocationResult | null>(null);
+  const [searchError, setSearchError] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSearch = useCallback(async () => {
+    const q = searchQuery.trim();
+    if (!q) return;
+    setSearchLoading(true);
+    setSearchError('');
+    setSearchResult(null);
+    try {
+      const res = await fetch(`${API_BASE}/search-location?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setSearchError(data.error || 'Location not found');
+        return;
+      }
+      setSearchResult(data);
+    } catch {
+      setSearchError('Failed to search. Try again.');
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [searchQuery]);
+
+  /* ── Carousel data ── */
+  const carouselItems = headlines.slice(0, 6);
+  const moreArticles = headlines.slice(6, 20);
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-10">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-2">
-            <AlertTriangle className="h-6 w-6 text-amber-500" />
-            <h1 className="font-heading text-3xl font-bold">Disaster News</h1>
-          </div>
-          <p className="text-muted-foreground">
-            Real-time natural disaster events from NASA EONET with related news articles. Sorted by urgency.
-          </p>
-        </div>
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-12">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="font-heading text-3xl md:text-4xl font-bold">Natural Disaster News</h1>
+        <p className="text-muted-foreground mt-2">
+          Live alerts, breaking headlines, and location-based disaster search.
+        </p>
+      </div>
 
-        {/* Controls */}
-        <div className="flex flex-wrap items-center gap-3 mb-6 p-4 rounded-lg bg-card border border-border">
-          <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-            <Search className="h-4 w-4 text-muted-foreground" />
+      {/* ═══ SECTION 1: Location Search Bar ═══ */}
+      <div className="mb-10">
+        <div className="flex items-center gap-2 mb-3">
+          <Search className="h-5 w-5 text-primary" />
+          <h2 className="font-heading text-lg font-semibold">Search Disasters by Location</h2>
+        </div>
+        <form
+          onSubmit={(e) => { e.preventDefault(); handleSearch(); }}
+          className="flex gap-2"
+        >
+          <div className="relative flex-1">
             <input
+              ref={searchInputRef}
               type="text"
-              placeholder="Search events..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="flex-1 bg-transparent border-none outline-none text-sm placeholder:text-muted-foreground"
+              placeholder="Enter a city, country, or region (e.g. Tokyo, California, Bangladesh)…"
+              className="w-full border rounded-lg px-4 py-3 pr-10 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
-          </div>
-          <div className="h-6 w-px bg-border hidden sm:block" />
-          <div className="flex items-center gap-2">
-            <Filter className="h-4 w-4 text-muted-foreground" />
-            {DAYS_OPTIONS.map((o) => (
-              <Button
-                key={o.days}
-                variant={daysFilter === o.days ? 'default' : 'outline'}
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => {
-                  setDaysFilter(o.days);
-                  // Re-fetch news with new time window
-                  setEvents((prev) => prev.map((e) => ({ ...e, newsLoaded: false, articles: undefined })));
-                  autoFetchedRef.current = false;
-                }}
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => { setSearchQuery(''); setSearchResult(null); setSearchError(''); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
-                {o.label}
-              </Button>
-            ))}
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
-          <div className="h-6 w-px bg-border hidden sm:block" />
-          <select
-            className="border rounded px-2 py-1 text-xs bg-background"
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c === 'all' ? 'All Categories' : CATEGORY_LABELS[c] || c}
-              </option>
-            ))}
-          </select>
-        </div>
+          <Button type="submit" disabled={searchLoading || !searchQuery.trim()}>
+            {searchLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            <span className="ml-1 hidden sm:inline">Search</span>
+          </Button>
+        </form>
 
-        {/* Event count */}
-        {!loading && (
-          <p className="text-xs text-muted-foreground mb-4">
-            Showing {filtered.length} of {events.length} active events
-          </p>
+        {/* Search results */}
+        {searchError && (
+          <p className="text-sm text-red-500 mt-3">{searchError}</p>
         )}
-
-        {/* Content */}
-        {loading ? (
-          <div className="flex items-center justify-center py-20 gap-3">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            <span className="text-muted-foreground">Loading disaster events...</span>
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="text-center py-20 text-muted-foreground">
-            No active events found matching your filters.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {filtered.map((event) => {
-              const isExpanded = expandedEvents.has(event.id);
-              const articles = event.articles || [];
-              const visibleArticles = isExpanded ? articles : articles.slice(0, 3);
-
-              return (
-                <div
-                  key={event.id}
-                  className="bg-card border border-border rounded-lg overflow-hidden hover:border-primary/20 transition-colors"
-                >
-                  {/* Event header */}
-                  <div className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap mb-1">
-                          <Badge
-                            variant="outline"
-                            className={cn(
-                              'text-[10px] px-1.5 py-0',
-                              event.urgencyBadge === 'High' && 'border-red-500/50 text-red-500 bg-red-500/10',
-                              event.urgencyBadge === 'Medium' && 'border-amber-500/50 text-amber-500 bg-amber-500/10',
-                              event.urgencyBadge === 'Low' && 'border-slate-500/50 text-slate-500 bg-slate-500/10'
-                            )}
-                          >
-                            {event.urgencyBadge}
-                          </Badge>
-                          <span className={cn(
-                            'text-[10px] px-1.5 py-0.5 rounded-full border',
-                            CATEGORY_COLORS[event.category] || 'bg-slate-500/20 text-slate-400 border-slate-500/30'
-                          )}>
-                            {event.categoryLabel}
-                          </span>
-                          <span className="text-[10px] text-muted-foreground">{timeAgo(event.date)}</span>
-                        </div>
-                        <h3 className="font-semibold text-sm">{event.title}</h3>
-
-                        {/* Official sources */}
-                        {event.sources.filter((s) => s.url).length > 0 && (
-                          <div className="flex flex-wrap gap-2 mt-2">
-                            {event.sources.filter((s) => s.url).map((s, i) => (
-                              <a
-                                key={i}
-                                href={s.url}
-                                target="_blank"
-                                rel="noopener"
-                                className="text-[10px] text-primary hover:underline inline-flex items-center gap-0.5"
-                              >
-                                <ExternalLink className="h-2.5 w-2.5" />
-                                Official Source {i + 1}
-                              </a>
-                            ))}
-                          </div>
-                        )}
+        {searchResult && (
+          <div className="mt-4 border rounded-lg p-4 bg-card">
+            <div className="flex items-center gap-2 mb-3">
+              <MapPin className="h-4 w-4 text-primary" />
+              <span className="font-medium text-sm">{searchResult.location?.displayName}</span>
+              <Badge variant="outline" className="text-xs">
+                {searchResult.totalFound} disaster{searchResult.totalFound !== 1 ? 's' : ''} found
+              </Badge>
+            </div>
+            {searchResult.disasters.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No active disasters near this location. That's good news!</p>
+            ) : (
+              <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                {searchResult.disasters.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-start justify-between gap-3 p-3 rounded-md border bg-background hover:bg-muted/50 transition-colors"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm">{d.title}</span>
+                        <Badge variant="outline" className={cn("text-[10px] uppercase", SEVERITY_BADGE_STYLES[d.severity] || '')}>
+                          {d.severity}
+                        </Badge>
                       </div>
-                      <Button variant="outline" size="sm" className="h-7 text-xs flex-shrink-0" onClick={() => viewOnMap(event)}>
-                        <MapPin className="h-3 w-3 mr-1" />
-                        Map
-                      </Button>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {d.categoryLabel} · {d.source}
+                        {d.distanceKm != null && ` · ~${d.distanceKm} km away`}
+                        {d.magnitudeValue && ` · M${d.magnitudeValue}`}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {new Date(d.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </p>
                     </div>
+                    <Button size="sm" variant="ghost" onClick={() => viewOnMap(d)}>
+                      <MapPin className="h-3 w-3" />
+                    </Button>
                   </div>
-
-                  {/* News articles */}
-                  {event.newsLoading && (
-                    <div className="px-4 pb-3 flex items-center gap-2 text-xs text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Loading news...
-                    </div>
-                  )}
-
-                  {event.newsLoaded && articles.length > 0 && (
-                    <div className="border-t border-border px-4 py-3 bg-muted/30">
-                      <div className="flex items-center gap-1 mb-2">
-                        <Newspaper className="h-3 w-3 text-muted-foreground" />
-                        <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                          Related News ({articles.length})
-                        </span>
-                      </div>
-                      <div className="space-y-1.5">
-                        {visibleArticles.map((a, i) => (
-                          <a
-                            key={i}
-                            href={a.url}
-                            target="_blank"
-                            rel="noopener"
-                            className="flex items-baseline gap-2 text-xs hover:bg-muted/50 rounded px-1 py-0.5 -mx-1 transition-colors group"
-                          >
-                            <span className="text-primary group-hover:underline flex-1 line-clamp-1">
-                              {a.title}
-                            </span>
-                            {a.source && (
-                              <span className="text-[10px] text-muted-foreground flex-shrink-0">
-                                {a.source}
-                              </span>
-                            )}
-                          </a>
-                        ))}
-                      </div>
-                      {articles.length > 3 && !isExpanded && (
-                        <button
-                          onClick={() => setExpandedEvents((s) => new Set(s).add(event.id))}
-                          className="text-[10px] text-primary hover:underline mt-2 inline-flex items-center gap-0.5"
-                        >
-                          <ChevronDown className="h-3 w-3" />
-                          Show {articles.length - 3} more
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {!event.newsLoaded && !event.newsLoading && (
-                    <div className="border-t border-border px-4 py-2">
-                      <button
-                        onClick={() => loadNewsForEvent(event.id)}
-                        className="text-xs text-primary hover:underline inline-flex items-center gap-1"
-                      >
-                        <Newspaper className="h-3 w-3" />
-                        Load related news
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
+
+      <div className="border-t border-border mb-10" />
+
+      {/* ═══ SECTION 2: Live Disaster Alerts (deduplicated) ═══ */}
+      <div className="mb-10">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-red-500" />
+            <h2 className="font-heading text-lg font-semibold">Live Disaster Alerts</h2>
+            {!alertsLoading && alerts.length > 0 && (
+              <Badge variant="outline" className="text-xs">{alerts.length} active</Badge>
+            )}
+          </div>
+          <Button variant="ghost" size="sm" onClick={fetchAlerts} disabled={alertsLoading}>
+            <RefreshCw className={cn("h-4 w-4 mr-1", alertsLoading && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
+
+        {alertsLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground py-4">
+            <Loader2 className="h-4 w-4 animate-spin" /> Fetching live alerts…
+          </div>
+        ) : alerts.length === 0 ? (
+          <div className="text-muted-foreground text-sm py-4">No active alerts at this time.</div>
+        ) : (
+          <div className="space-y-3">
+            {alerts.map((alert) => (
+              <div
+                key={alert.id}
+                className={cn(
+                  "rounded-lg border p-4 transition-colors",
+                  alert.severity === 'critical' && "border-red-500/40 bg-red-500/5",
+                  alert.severity === 'high' && "border-amber-500/40 bg-amber-500/5",
+                  alert.severity === 'medium' && "border-yellow-500/30 bg-yellow-500/5",
+                  alert.severity === 'low' && "border-border bg-card",
+                )}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-semibold text-sm">{alert.title}</h3>
+                      <Badge
+                        variant="outline"
+                        className={cn("text-[10px] uppercase tracking-wider", SEVERITY_BADGE_STYLES[alert.severity])}
+                      >
+                        {alert.severity}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">{alert.categoryLabel}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {new Date(alert.date).toLocaleDateString(undefined, {
+                        weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                      })}
+                      {alert.magnitudeValue && ` · Magnitude ${alert.magnitudeValue}`}
+                    </p>
+                    {alert.articles && alert.articles.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {alert.articles.slice(0, 3).map((article, i) => (
+                          <a
+                            key={i}
+                            href={article.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-xs text-primary hover:underline truncate group"
+                          >
+                            <ExternalLink className="h-3 w-3 shrink-0 opacity-50 group-hover:opacity-100" />
+                            <span className="truncate">{article.title?.slice(0, 100)}</span>
+                            {article.source && <span className="text-muted-foreground shrink-0">— {article.source}</span>}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => viewOnMap({
+                    id: alert.id, title: alert.title, category: alert.category,
+                    categoryLabel: alert.categoryLabel, date: alert.date,
+                    lat: alert.lat, lon: alert.lon, urgencyScore: alert.urgencyScore,
+                    urgencyBadge: alert.severity === 'critical' || alert.severity === 'high' ? 'High' : alert.severity === 'medium' ? 'Medium' : 'Low',
+                    sources: [],
+                  })}>
+                    <MapPin className="h-3 w-3 mr-1" /> Map
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-border mb-10" />
+
+      {/* ═══ SECTION 3: Headlines Carousel ═══ */}
+      <div className="mb-10">
+        <div className="flex items-center gap-2 mb-4">
+          <Newspaper className="h-5 w-5 text-primary" />
+          <h2 className="font-heading text-lg font-semibold">Breaking Headlines</h2>
+        </div>
+
+        {headlinesLoading ? (
+          <div className="flex items-center gap-2 text-muted-foreground py-8">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading headlines…
+          </div>
+        ) : carouselItems.length === 0 ? (
+          <p className="text-muted-foreground text-sm py-4">No headlines available.</p>
+        ) : (
+          <div>
+            {/* Main carousel card */}
+            <div className="relative overflow-hidden rounded-lg border bg-card min-h-[180px]">
+              {carouselItems.map((item, i) => (
+                <a
+                  key={i}
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(
+                    "absolute inset-0 p-6 flex flex-col justify-end transition-all duration-500",
+                    i === carouselIdx ? "opacity-100 translate-x-0" : "opacity-0 translate-x-full pointer-events-none",
+                  )}
+                >
+                  {item.disasterCategory && (
+                    <span className="text-[10px] tracking-[0.15em] uppercase text-red-500/80 mb-0.5">
+                      {item.disasterCategory}{item.disasterTitle ? ` — ${item.disasterTitle}` : ''}
+                    </span>
+                  )}
+                  <span className="text-[10px] tracking-[0.15em] uppercase text-muted-foreground mb-1">
+                    {item.source}
+                    {item.publishedAt && ` · ${new Date(item.publishedAt).toLocaleDateString()}`}
+                  </span>
+                  <h3 className="font-heading text-xl font-semibold leading-snug line-clamp-3 hover:text-primary transition-colors">
+                    {item.title}
+                  </h3>
+                  <span className="text-xs text-primary flex items-center gap-1 mt-2">
+                    <ExternalLink className="h-3 w-3" /> Read full article
+                  </span>
+                </a>
+              ))}
+            </div>
+
+            {/* Carousel controls */}
+            <div className="flex items-center justify-center gap-3 mt-3">
+              <button
+                onClick={() => setCarouselIdx((i) => (i - 1 + carouselItems.length) % carouselItems.length)}
+                className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <div className="flex gap-1.5">
+                {carouselItems.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setCarouselIdx(i)}
+                    className={cn("w-2 h-2 rounded-full transition-colors", i === carouselIdx ? "bg-primary" : "bg-muted-foreground/30")}
+                  />
+                ))}
+              </div>
+              <button
+                onClick={() => setCarouselIdx((i) => (i + 1) % carouselItems.length)}
+                className="p-1 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ═══ SECTION 4: More Articles (smaller cards) ═══ */}
+      {moreArticles.length > 0 && (
+        <div className="mb-10">
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            More Headlines
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {moreArticles.map((article, i) => (
+              <a
+                key={i}
+                href={article.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group block border rounded-md p-3 bg-card hover:border-primary/30 transition-colors"
+              >
+                {article.disasterCategory && (
+                  <span className="text-[10px] tracking-[0.1em] uppercase text-red-500/70 block mb-0.5">
+                    {article.disasterCategory}
+                  </span>
+                )}
+                <span className="text-[10px] tracking-[0.1em] uppercase text-muted-foreground block mb-1">
+                  {article.source}
+                </span>
+                <h4 className="text-xs font-medium leading-snug line-clamp-3 group-hover:text-primary transition-colors">
+                  {article.title}
+                </h4>
+                {article.publishedAt && (
+                  <span className="text-[10px] text-muted-foreground/60 mt-1.5 block">
+                    {new Date(article.publishedAt).toLocaleDateString()}
+                  </span>
+                )}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
