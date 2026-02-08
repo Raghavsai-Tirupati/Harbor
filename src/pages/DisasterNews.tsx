@@ -6,8 +6,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-
-const API_BASE = '/api';
+import { API_BASE } from '@/lib/api';
 
 /* ── Types ── */
 type Article = {

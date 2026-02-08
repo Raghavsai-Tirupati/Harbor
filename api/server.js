@@ -8,7 +8,7 @@ import { fetchEventNews, fetchEventNewsFast } from './event-news.js';
 import { fetchGoogleNews, fetchDisasterHeadlines } from './google-news.js';
 
 const app = express();
-const PORT = process.env.API_PORT || 3001;
+const PORT = process.env.PORT || process.env.API_PORT || 3001;
 
 app.use(cors({ origin: true }));
 app.use(express.json());
@@ -550,7 +550,8 @@ app.get('/search-location', async (req, res) => {
 
 app.get('/health', (_, res) => res.json({ ok: true }));
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Disaster API listening on http://localhost:${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+app.listen(PORT, HOST, () => {
+  console.log(`Disaster API listening on http://${HOST}:${PORT}`);
   console.log('Endpoints: /eonet, /earthquakes, /eonet-events, /event-news, /alerts, /headlines, /search-location, /health');
 });

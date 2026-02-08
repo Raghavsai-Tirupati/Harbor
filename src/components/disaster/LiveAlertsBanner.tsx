@@ -1,8 +1,7 @@
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { X } from 'lucide-react';
-
-const API_BASE = '/api';
+import { API_BASE } from '@/lib/api';
 
 type AlertItem = {
   id: string;

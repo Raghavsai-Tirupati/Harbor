@@ -3,8 +3,7 @@ import { MapPin, ChevronLeft, ChevronRight, Menu, ExternalLink, Loader2 } from '
 import { motion, AnimatePresence } from 'framer-motion';
 import { HeroVideoCarousel } from '@/components/HeroVideoCarousel';
 import { useState, useRef, useCallback, useEffect } from 'react';
-
-const API_BASE = '/api';
+import { API_BASE } from '@/lib/api';
 
 type HeadlineArticle = {
   url: string;
