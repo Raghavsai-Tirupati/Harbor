@@ -4,7 +4,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { HeroVideoCarousel } from '@/components/HeroVideoCarousel';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { fetchHeadlines } from '@/lib/api';
-import { fetchOgImages } from '@/lib/ogImage';
 
 type HeadlineArticle = {
   url: string;
@@ -35,7 +34,6 @@ export default function Home() {
   const videoChangeCountRef = useRef(0);
   const [headlines, setHeadlines] = useState<HeadlineArticle[]>([]);
   const [headlinesLoading, setHeadlinesLoading] = useState(true);
-  const [ogImages, setOgImages] = useState<Map<string, string>>(new Map());
 
   // Fetch real headlines via EONET + Google News
   useEffect(() => {
@@ -45,12 +43,7 @@ export default function Home() {
         setHeadlinesLoading(true);
         const data = await fetchHeadlines();
         if (!cancelled) {
-          const articles = data.articles || [];
-          setHeadlines(articles);
-          // Fetch OG images in background
-          fetchOgImages(articles.slice(0, 8).map((a: HeadlineArticle) => a.url)).then((map) => {
-            if (!cancelled) setOgImages(map);
-          });
+          setHeadlines(data.articles || []);
         }
       } catch {
         if (!cancelled) setHeadlines([]);
@@ -168,41 +161,28 @@ export default function Home() {
                             href={item.url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className={`block h-52 border border-white/15 rounded-lg overflow-hidden relative flex flex-col justify-end p-6 transition-colors cursor-pointer group ${
+                            className={`block h-52 border border-white/15 backdrop-blur-sm flex flex-col justify-end p-6 transition-colors cursor-pointer group ${
                               offset === 0
-                                ? 'hover:border-white/30'
-                                : 'pointer-events-none'
+                                ? 'bg-white/10 hover:bg-white/15'
+                                : 'bg-white/5 pointer-events-none'
                             }`}
                           >
-                            {/* Background image */}
-                            {ogImages.get(item.url) && (
-                              <div
-                                className="absolute inset-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105"
-                                style={{ backgroundImage: `url(${ogImages.get(item.url)})` }}
-                              />
-                            )}
-                            {/* Dark overlay for text readability */}
-                            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/70 to-black/30" />
-
-                            {/* Content */}
-                            <div className="relative z-10">
-                              {item.disasterCategory && (
-                                <span className="text-[10px] tracking-[0.15em] uppercase text-red-400/70 mb-1 block">
-                                  {item.disasterCategory}{item.disasterTitle ? ` — ${item.disasterTitle}` : ''}
-                                </span>
-                              )}
-                              <span className="text-[10px] tracking-[0.2em] uppercase text-white/35 mb-2 block">
-                                {item.source}
+                            {item.disasterCategory && (
+                              <span className="text-[10px] tracking-[0.15em] uppercase text-red-400/70 mb-1">
+                                {item.disasterCategory}{item.disasterTitle ? ` — ${item.disasterTitle}` : ''}
                               </span>
-                              <h3 className="font-heading text-lg font-semibold text-white mb-1 line-clamp-2">
-                                {item.title}
-                              </h3>
-                              {offset === 0 && (
-                                <span className="text-xs text-white/40 flex items-center gap-1 mt-1">
-                                  <ExternalLink className="h-3 w-3" /> Read full article
-                                </span>
-                              )}
-                            </div>
+                            )}
+                            <span className="text-[10px] tracking-[0.2em] uppercase text-white/35 mb-2">
+                              {item.source}
+                            </span>
+                            <h3 className="font-heading text-lg font-semibold text-white mb-1 line-clamp-2">
+                              {item.title}
+                            </h3>
+                            {offset === 0 && (
+                              <span className="text-xs text-white/40 flex items-center gap-1 mt-1">
+                                <ExternalLink className="h-3 w-3" /> Read full article
+                              </span>
+                            )}
                           </a>
                         </motion.div>
                       );

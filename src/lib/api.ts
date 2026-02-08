@@ -105,7 +105,7 @@ export async function fetchAlerts() {
   const seen = new Set<string>();
   const scored: {
     id: string; title: string; category: string; categoryLabel: string;
-    alertText: string; severity: 'critical' | 'high' | 'medium' | 'low'; urgencyScore: number;
+    alertText: string; severity: string; urgencyScore: number;
     date: string; lat: number; lon: number; magnitudeValue: number | null;
     articles: unknown[];
   }[] = [];
@@ -125,7 +125,7 @@ export async function fetchAlerts() {
       category: catId,
       categoryLabel: ALERT_CATEGORY_LABELS[catId] || catId,
       alertText: `${ALERT_CATEGORY_LABELS[catId] || 'Event'}: ${title}`,
-      severity: getSeverity(score) as 'critical' | 'high' | 'medium' | 'low',
+      severity: getSeverity(score),
       urgencyScore: Math.round(score * 100) / 100,
       date: props.date || new Date().toISOString(),
       lat: centroid.lat,
