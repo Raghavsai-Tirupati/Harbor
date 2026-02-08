@@ -136,8 +136,143 @@ app.get('/event-news', async (req, res) => {
   }
 });
 
+// Global disaster news endpoint (similar to /api/news/global)
+app.get('/news/global', async (req, res) => {
+  const limit = parseInt(req.query.limit || '20', 10);
+  const types = req.query.types ? req.query.types.split(',') : [];
+  
+  try {
+    // Build GDELT query
+    const baseKeywords = 'earthquake OR wildfire OR hurricane OR flood OR tornado OR disaster';
+    const query = encodeURIComponent(baseKeywords);
+    const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${query}&mode=artlist&maxrecords=${limit + 5}&timespan=3days&sort=DateDesc&format=json`;
+    
+    const r = await fetch(url);
+    const text = await r.text();
+    
+    // Try to parse JSON, fallback to empty array if it fails
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      console.error('GDELT API returned non-JSON response:', text.slice(0, 100));
+      return res.json({ items: [], nextCursor: null });
+    }
+    
+    const articles = Array.isArray(data) ? data : data.articles || [];
+    
+    const items = articles.slice(0, limit).map((a, i) => ({
+      id: `global-${i}-${Date.now()}`,
+      title: a.title || 'Untitled',
+      summary: a.title || '',
+      source: a.domain || 'Unknown',
+      url: a.url,
+      imageUrl: a.socialimage || null,
+      publishedAt: parseGdeltDate(a.seendate),
+      hazardTypes: detectHazardType(a.title || ''),
+    }));
+    
+    res.json({ items, nextCursor: null });
+  } catch (err) {
+    console.error('Global news error:', err);
+    res.json({ items: [], nextCursor: null });
+  }
+});
+
+// Local disaster news endpoint (similar to /api/news/local)
+app.get('/news/local', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lon = parseFloat(req.query.lon);
+  const radiusKm = parseInt(req.query.radiusKm || '50', 10);
+  const limit = parseInt(req.query.limit || '20', 10);
+  
+  if (isNaN(lat) || isNaN(lon)) {
+    return res.status(400).json({ error: 'lat and lon required' });
+  }
+  
+  try {
+    // Get approximate region for location
+    const region = getApproxRegion(lat, lon);
+    const baseKeywords = 'earthquake OR wildfire OR hurricane OR flood OR tornado OR disaster';
+    const query = encodeURIComponent(`(${baseKeywords}) ${region}`);
+    const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${query}&mode=artlist&maxrecords=${limit + 5}&timespan=7days&sort=DateDesc&format=json`;
+    
+    const r = await fetch(url);
+    const text = await r.text();
+    
+    // Try to parse JSON, fallback to empty array if it fails
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (parseErr) {
+      console.error('GDELT API returned non-JSON response for location:', text.slice(0, 100));
+      return res.json({ items: [], nextCursor: null });
+    }
+    
+    const articles = Array.isArray(data) ? data : data.articles || [];
+    
+    const items = articles.slice(0, limit).map((a, i) => ({
+      id: `local-${i}-${Date.now()}`,
+      title: a.title || 'Untitled',
+      summary: a.title || '',
+      source: a.domain || 'Unknown',
+      url: a.url,
+      imageUrl: a.socialimage || null,
+      publishedAt: parseGdeltDate(a.seendate),
+      hazardTypes: detectHazardType(a.title || ''),
+    }));
+    
+    res.json({ items, nextCursor: null });
+  } catch (err) {
+    console.error('Local news error:', err);
+    res.json({ items: [], nextCursor: null });
+  }
+});
+
+// Helper functions for news endpoints
+function parseGdeltDate(dateStr) {
+  if (!dateStr) return new Date().toISOString();
+  try {
+    const y = dateStr.slice(0, 4);
+    const m = dateStr.slice(4, 6);
+    const d = dateStr.slice(6, 8);
+    const h = dateStr.slice(9, 11) || '00';
+    const min = dateStr.slice(11, 13) || '00';
+    const s = dateStr.slice(13, 15) || '00';
+    return `${y}-${m}-${d}T${h}:${min}:${s}Z`;
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
+function detectHazardType(title) {
+  const lower = title.toLowerCase();
+  if (lower.includes('wildfire') || lower.includes('fire') || lower.includes('blaze')) return ['wildfire'];
+  if (lower.includes('earthquake') || lower.includes('seismic') || lower.includes('quake')) return ['earthquake'];
+  if (lower.includes('hurricane') || lower.includes('cyclone') || lower.includes('typhoon')) return ['cyclone'];
+  if (lower.includes('flood') || lower.includes('flooding')) return ['flood'];
+  if (lower.includes('tornado') || lower.includes('twister')) return ['tornado'];
+  if (lower.includes('storm')) return ['storm'];
+  if (lower.includes('volcano') || lower.includes('eruption')) return ['volcano'];
+  return ['other'];
+}
+
+function getApproxRegion(lat, lon) {
+  // Very rough region mapping for GDELT queries
+  if (lat > 24 && lat < 50 && lon > -130 && lon < -60) return 'United States';
+  if (lat > 35 && lat < 72 && lon > -10 && lon < 40) return 'Europe';
+  if (lat > -35 && lat < 35 && lon > 60 && lon < 150) return 'Asia';
+  if (lat > -50 && lat < -10 && lon > 110 && lon < 180) return 'Australia';
+  if (lat > 5 && lat < 40 && lon > 60 && lon < 100) return 'India';
+  if (lat > -55 && lat < 13 && lon > -80 && lon < -35) return 'South America';
+  if (lat > -35 && lat < 38 && lon > -20 && lon < 55) return 'Africa';
+  if (lat > 20 && lat < 50 && lon > 100 && lon < 150) return 'Japan China';
+  return ''; // Empty region = global fallback
+}
+
 app.get('/health', (_, res) => res.json({ ok: true }));
 
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`Disaster API listening on http://localhost:${PORT}`);
+  console.log(`Endpoints: /eonet, /earthquakes, /eonet-events, /event-news, /news/global, /news/local`);
 });
