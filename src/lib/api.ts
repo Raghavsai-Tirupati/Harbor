@@ -1,13 +1,10 @@
 /**
  * API client for Harbor.
  *
- * In development: proxies through Vite to localhost:3001.
- * In production: calls external APIs directly from the browser.
+ * Calls external APIs directly from the browser — no backend server needed.
  *   - NASA EONET & USGS have CORS enabled (direct calls).
  *   - Google News RSS uses allorigins.win CORS proxy.
  */
-
-const isDev = import.meta.env.DEV;
 
 /* ── Helpers ── */
 const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
@@ -95,17 +92,12 @@ async function fetchGoogleNewsClient(query: string, max = 8) {
 }
 
 /* ══════════════════════════════════════════════════════════
-   Public API functions — used by the frontend components
+   Public API functions — used by the frontend components.
+   Always call external APIs directly from the browser.
    ══════════════════════════════════════════════════════════ */
 
 /** Fetch live disaster alerts (deduplicated, with articles) */
 export async function fetchAlerts() {
-  if (isDev) {
-    const res = await fetch('/api/alerts');
-    return res.json();
-  }
-
-  // Production: call NASA EONET directly
   const eonetRes = await fetch('https://eonet.gsfc.nasa.gov/api/v3/events/geojson?status=open&days=7&limit=100&bbox=-180,85,180,-85');
   const eonetData = await eonetRes.json();
   const features = eonetData.features || [];
@@ -149,12 +141,6 @@ export async function fetchAlerts() {
 
 /** Fetch headlines tied to NASA disasters via Google News */
 export async function fetchHeadlines() {
-  if (isDev) {
-    const res = await fetch('/api/headlines');
-    return res.json();
-  }
-
-  // Production: EONET events → Google News for each
   const eonetRes = await fetch('https://eonet.gsfc.nasa.gov/api/v3/events/geojson?status=open&days=14&limit=50&bbox=-180,85,180,-85');
   const eonetData = await eonetRes.json();
   const features = eonetData.features || [];
@@ -229,12 +215,6 @@ export async function fetchHeadlines() {
 
 /** Search for disasters near a location */
 export async function searchLocation(query: string) {
-  if (isDev) {
-    const res = await fetch(`/api/search-location?q=${encodeURIComponent(query)}`);
-    return res.json();
-  }
-
-  // Production: Nominatim geocoding → EONET + USGS
   const geoRes = await fetch(
     `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
     { headers: { 'User-Agent': 'HarborDisasterApp/1.0' } }
