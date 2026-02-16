@@ -101,7 +101,8 @@ export default function DisasterNews() {
         severity: (a.severity as AlertData['severity']) || 'medium',
       })) as AlertData[];
       setAlerts(deduplicateByTitle(raw));
-    } catch {
+    } catch (err) {
+      console.error('[Harbor] Alerts fetch error:', err);
       setAlerts([]);
     } finally {
       setAlertsLoading(false);

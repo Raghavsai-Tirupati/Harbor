@@ -235,7 +235,8 @@ export default function Home() {
         setHeadlinesLoading(true);
         const data = await fetchHeadlines();
         if (!cancelled) setHeadlines(data.articles || []);
-      } catch {
+      } catch (err) {
+        console.error('[Harbor] Home headlines fetch error:', err);
         if (!cancelled) setHeadlines([]);
       } finally {
         if (!cancelled) setHeadlinesLoading(false);

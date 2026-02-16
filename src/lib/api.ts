@@ -3,11 +3,15 @@
  *
  * Calls external APIs directly from the browser — no backend server needed.
  *   - NASA EONET & USGS have CORS enabled (direct calls).
- *   - Google News RSS uses allorigins.win CORS proxy.
+ *   - Google News RSS uses CORS proxies with multiple fallbacks.
  */
 
-/* ── Helpers ── */
-const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+/* ── CORS Proxies (tried in order if one fails) ── */
+const CORS_PROXIES = [
+  'https://api.allorigins.win/raw?url=',
+  'https://corsproxy.io/?',
+  'https://api.codetabs.com/v1/proxy?quest=',
+];
 
 const ALERT_CATEGORY_LABELS: Record<string, string> = {
   severeStorms: 'Severe Storm', wildfires: 'Wildfire', volcanoes: 'Volcanic Eruption',
@@ -65,6 +69,22 @@ function deduplicateByTitle<T extends { title: string }>(items: T[]): T[] {
   });
 }
 
+/* ── Fetch with CORS proxy fallbacks ── */
+async function fetchWithCorsProxy(targetUrl: string): Promise<string> {
+  for (const proxy of CORS_PROXIES) {
+    try {
+      const res = await fetch(proxy + encodeURIComponent(targetUrl), { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.length > 50) return text;
+      }
+    } catch (err) {
+      console.warn(`[Harbor] CORS proxy ${proxy} failed for ${targetUrl}:`, err);
+    }
+  }
+  throw new Error(`All CORS proxies failed for: ${targetUrl}`);
+}
+
 /* ── Parse Google News RSS XML in the browser ── */
 function parseGoogleNewsXml(xml: string) {
   const parser = new DOMParser();
@@ -84,11 +104,24 @@ function parseGoogleNewsXml(xml: string) {
 }
 
 async function fetchGoogleNewsClient(query: string, max = 8) {
-  const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
-  const res = await fetch(CORS_PROXY + encodeURIComponent(rssUrl));
-  if (!res.ok) return [];
-  const xml = await res.text();
-  return parseGoogleNewsXml(xml).slice(0, max);
+  try {
+    const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
+    const xml = await fetchWithCorsProxy(rssUrl);
+    return parseGoogleNewsXml(xml).slice(0, max);
+  } catch (err) {
+    console.warn('[Harbor] Google News fetch failed for query:', query, err);
+    return [];
+  }
+}
+
+/* ── Fetch EONET events (shared by alerts + headlines) ── */
+async function fetchEonetEvents(days: number, limit: number) {
+  console.log(`[Harbor] Fetching EONET events (days=${days}, limit=${limit})...`);
+  const res = await fetch(`https://eonet.gsfc.nasa.gov/api/v3/events/geojson?status=open&days=${days}&limit=${limit}&bbox=-180,85,180,-85`);
+  if (!res.ok) throw new Error(`EONET API returned ${res.status}`);
+  const data = await res.json();
+  console.log(`[Harbor] EONET returned ${(data.features || []).length} features`);
+  return data.features || [];
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -98,9 +131,8 @@ async function fetchGoogleNewsClient(query: string, max = 8) {
 
 /** Fetch live disaster alerts (deduplicated, with articles) */
 export async function fetchAlerts() {
-  const eonetRes = await fetch('https://eonet.gsfc.nasa.gov/api/v3/events/geojson?status=open&days=7&limit=100&bbox=-180,85,180,-85');
-  const eonetData = await eonetRes.json();
-  const features = eonetData.features || [];
+  console.log('[Harbor] fetchAlerts() called');
+  const features = await fetchEonetEvents(7, 100);
 
   const seen = new Set<string>();
   const scored: {
@@ -136,49 +168,65 @@ export async function fetchAlerts() {
   }
 
   scored.sort((a, b) => b.urgencyScore - a.urgencyScore);
+  console.log(`[Harbor] fetchAlerts() returning ${scored.length} deduplicated alerts`);
   return { alerts: scored.slice(0, 10), totalEvents: features.length, fetchedAt: new Date().toISOString() };
 }
 
 /** Fetch headlines tied to NASA disasters via Google News */
 export async function fetchHeadlines() {
-  const eonetRes = await fetch('https://eonet.gsfc.nasa.gov/api/v3/events/geojson?status=open&days=14&limit=50&bbox=-180,85,180,-85');
-  const eonetData = await eonetRes.json();
-  const features = eonetData.features || [];
+  console.log('[Harbor] fetchHeadlines() called');
+
+  // Step 1: Get EONET events
+  let features: Record<string, unknown>[] = [];
+  try {
+    features = await fetchEonetEvents(14, 50);
+  } catch (err) {
+    console.error('[Harbor] EONET fetch failed in fetchHeadlines:', err);
+    // Return empty but don't throw — show "no headlines" instead of crash
+    return { articles: [], events: [], fetchedAt: new Date().toISOString() };
+  }
 
   // Deduplicate events
   const seenTitles = new Set<string>();
   const events: { title: string; category: string; categoryLabel: string; severity: string; urgencyScore: number; date: string; magnitudeValue: number | null }[] = [];
   for (const f of features) {
-    const title = (f.properties?.title || '').trim();
+    const props = (f.properties || {}) as Record<string, unknown>;
+    const title = ((props.title as string) || '').trim();
     const norm = title.toLowerCase().replace(/[^a-z0-9\s]/g, '').slice(0, 50);
     if (!norm || seenTitles.has(norm)) continue;
     seenTitles.add(norm);
-    const catId = f.properties?.categories?.[0]?.id || 'other';
-    const score = computeUrgency(f);
+    const cats = props.categories as { id?: string }[] | undefined;
+    const catId = cats?.[0]?.id || 'other';
+    const score = computeUrgency(f as { properties?: Record<string, unknown>; geometry?: unknown });
     events.push({
       title, category: catId, categoryLabel: ALERT_CATEGORY_LABELS[catId] || catId,
       severity: getSeverity(score), urgencyScore: score,
-      date: f.properties?.date || new Date().toISOString(),
-      magnitudeValue: f.properties?.magnitudeValue || null,
+      date: (props.date as string) || new Date().toISOString(),
+      magnitudeValue: (props.magnitudeValue as number) || null,
     });
   }
   events.sort((a, b) => b.urgencyScore - a.urgencyScore);
+  console.log(`[Harbor] ${events.length} unique EONET events found`);
 
-  // Fetch Google News for top 6 events
+  // Step 2: Fetch Google News for top 6 events
   const topEvents = events.slice(0, 6);
+  console.log('[Harbor] Fetching Google News for top events:', topEvents.map((e) => e.title));
   const newsResults = await Promise.allSettled(
-    topEvents.map((e) => fetchGoogleNewsClient(e.title, 5).catch(() => []))
+    topEvents.map((e) => fetchGoogleNewsClient(e.title, 5))
   );
 
-  // Also fetch general disaster news
+  // Step 3: Also fetch general disaster news
   let generalNews: { url: string; title: string; source: string; publishedAt: string | null }[] = [];
   try {
     generalNews = await fetchGoogleNewsClient(
       'natural disaster OR earthquake OR hurricane OR wildfire OR flood OR cyclone OR tsunami', 10
     );
-  } catch { /* ignore */ }
+    console.log(`[Harbor] General disaster news: ${generalNews.length} articles`);
+  } catch (err) {
+    console.warn('[Harbor] General news fetch failed:', err);
+  }
 
-  // Combine
+  // Step 4: Combine articles
   const seenArticleTitles = new Set<string>();
   const articles: {
     url: string; title: string; source: string; publishedAt: string | null;
@@ -203,6 +251,24 @@ export async function fetchHeadlines() {
     articles.push({ ...a, disasterTitle: null, disasterCategory: 'General', disasterSeverity: null });
   }
 
+  // Step 5: If Google News completely failed, create headlines from EONET event names
+  if (articles.length === 0 && topEvents.length > 0) {
+    console.warn('[Harbor] No Google News articles — falling back to EONET event titles as headlines');
+    for (const evt of events.slice(0, 12)) {
+      const searchUrl = `https://news.google.com/search?q=${encodeURIComponent(evt.title)}`;
+      articles.push({
+        url: searchUrl,
+        title: `${evt.categoryLabel}: ${evt.title}`,
+        source: 'NASA EONET',
+        publishedAt: evt.date,
+        disasterTitle: evt.title,
+        disasterCategory: evt.categoryLabel,
+        disasterSeverity: evt.severity,
+      });
+    }
+  }
+
+  console.log(`[Harbor] fetchHeadlines() returning ${articles.length} articles`);
   return {
     articles: articles.slice(0, 20),
     events: topEvents.slice(0, 6).map((e) => ({
@@ -215,6 +281,7 @@ export async function fetchHeadlines() {
 
 /** Search for disasters near a location */
 export async function searchLocation(query: string) {
+  console.log(`[Harbor] searchLocation("${query}") called`);
   const geoRes = await fetch(
     `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
     { headers: { 'User-Agent': 'HarborDisasterApp/1.0' } }
@@ -280,6 +347,7 @@ export async function searchLocation(query: string) {
   disasters.sort((a, b) => (a.distanceKm || 999) - (b.distanceKm || 999));
   const unique = deduplicateByTitle(disasters);
 
+  console.log(`[Harbor] searchLocation() returning ${unique.length} disasters near ${displayName}`);
   return {
     location: { query, displayName, lat, lon },
     disasters: unique.slice(0, 20),
